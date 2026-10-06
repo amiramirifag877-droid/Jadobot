@@ -1,22 +1,63 @@
 const http = require("http");
-const crypto = require("crypto");
 
 /*
-  توکن فعلی رباتت را اینجا قرار بده.
-  برای نسخه نهایی بهتر است از Environment Variable در Render استفاده شود.
-*/
-const BOT_TOKEN =
-  process.env.BOT_TOKEN || "8802340831:AAHdNczEj3G8wJhH0KtCsPMvqXPH6iNIRoY";
+  JadoMovie Publisher Bot
+  Node.js 18+
 
-const OWNER_ID = "8639455918";
-const BOT_USERNAME = "Managerjadomutbot";
-const DEFAULT_CHANNEL = "@JadoMovie";
+  مراحل انتشار:
+  1. پوستر
+  2. سال ساخت
+  3. نام انگلیسی
+  4. امتیاز IMDb
+  5. کشور سازنده
+  6. ژانر
+  7. خلاصه داستان
+  8. نوع دانلود
+  9. لینک زیرنویس / دوبله
+  10. انتشار در کانال
+
+  Premium Emoji فعال است.
+*/
+
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const OWNER_ID = String(process.env.OWNER_ID || "8639455918");
+const DEFAULT_CHANNEL = process.env.DEFAULT_CHANNEL || "@JadoMovie";
+const PORT = Number(process.env.PORT || 10000);
+
+/* =========================
+   Premium Emoji IDs
+========================= */
+
+const EMOJI = {
+  film: "5937999673510858217",
+  movie: "5911002797578396680",
+  country: "5987875234638730248",
+  genre: "6032625495328165724",
+  summary: "5886436057091673541",
+  subtitle: "5870753782874246579",
+  dub: "5258336354642697821",
+  channel: "5877468380125990242",
+  download: "5897554554894946515",
+  imdb: "6028346797368283073"
+};
+
+/*
+  ساخت Premium Emoji
+*/
+function premiumEmoji(id, fallback = "⭐") {
+  return `<tg-emoji emoji-id="${id}">${fallback}</tg-emoji>`;
+}
+
+/* =========================
+   Runtime Storage
+========================= */
 
 const admins = new Set();
+const states = new Map();
 
 const channels = new Map([
   [
-    DEFAULT_CHANNEL,
+    String(DEFAULT_CHANNEL),
     {
       id: DEFAULT_CHANNEL,
       username: DEFAULT_CHANNEL,
@@ -25,20 +66,19 @@ const channels = new Map([
   ]
 ]);
 
-const states = new Map();
-const downloads = new Map();
-const emojiSamples = new Map();
-
-const PORT = process.env.PORT || 10000;
-
-
 /* =========================
    Telegram API
 ========================= */
 
 async function tg(method, body = {}) {
+  if (!BOT_TOKEN) {
+    throw new Error(
+      "BOT_TOKEN تنظیم نشده است. آن را در Environment Variables قرار بده."
+    );
+  }
+
   try {
-    const r = await fetch(
+    const response = await fetch(
       `https://api.telegram.org/bot${BOT_TOKEN}/${method}`,
       {
         method: "POST",
@@ -49,16 +89,25 @@ async function tg(method, body = {}) {
       }
     );
 
-    return await r.json();
-  } catch (e) {
-    console.error("Telegram API error:", e);
+    const data = await response.json();
+
+    if (!data.ok) {
+      console.error(
+        `Telegram API Error [${method}]:`,
+        data.description
+      );
+    }
+
+    return data;
+  } catch (error) {
+    console.error("Telegram Request Error:", error);
+
     return {
       ok: false,
-      description: e.message
+      description: error.message
     };
   }
 }
-
 
 /* =========================
    Helpers
@@ -71,23 +120,25 @@ function isAdmin(id) {
   );
 }
 
-function esc(s) {
-  return String(s ?? "")
+function escapeHTML(value) {
+  return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }
 
-function escAttr(s) {
-  return String(s ?? "")
+function escapeAttribute(value) {
+  return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }
 
-function validUrl(url) {
-  return /^https?:\/\/\S+$/i.test(String(url || "").trim());
+function validURL(url) {
+  return /^https?:\/\/\S+$/i.test(
+    String(url || "").trim()
+  );
 }
 
 async function send(chatId, text, extra = {}) {
@@ -99,7 +150,6 @@ async function send(chatId, text, extra = {}) {
   });
 }
 
-
 /* =========================
    Main Menu
 ========================= */
@@ -110,12 +160,16 @@ async function startMenu(chatId, uid) {
     chatId
   });
 
-  const buttons = [
-    ...channels.values()
-  ].map(c => [
+  const buttons = [...channels.values()].map(channel => [
     {
-      text: c.title || c.username,
-      callback_data: "channel:" + String(c.id)
+      text:
+        channel.title ||
+        channel.username ||
+        "Channel",
+
+      callback_data:
+        "channel:" +
+        String(channel.id)
     }
   ]);
 
@@ -130,89 +184,109 @@ async function startMenu(chatId, uid) {
   );
 }
 
-
 /* =========================
    Update Handler
 ========================= */
 
 async function handle(update) {
 
-  /* ---------- Callback ---------- */
+  /* =========================
+     CALLBACK
+  ========================= */
 
   if (update.callback_query) {
-    const q = update.callback_query;
 
-    await tg("answerCallbackQuery", {
-      callback_query_id: q.id
-    });
+    const query =
+      update.callback_query;
 
-    const uid = q.from.id;
-    const chatId = q.message.chat.id;
+    await tg(
+      "answerCallbackQuery",
+      {
+        callback_query_id: query.id
+      }
+    );
 
-    if (!isAdmin(uid)) return;
+    const uid =
+      query.from.id;
 
-    if (q.data?.startsWith("channel:")) {
+    const chatId =
+      query.message.chat.id;
 
-      const key = q.data.slice(8);
+    if (!isAdmin(uid)) {
+      return;
+    }
 
-      const ch = [
-        ...channels.values()
-      ].find(
-        c => String(c.id) === key
-      );
+    if (
+      query.data &&
+      query.data.startsWith("channel:")
+    ) {
 
-      if (!ch) {
+      const channelId =
+        query.data.slice(
+          "channel:".length
+        );
+
+      const channel =
+        [...channels.values()].find(
+          c =>
+            String(c.id) ===
+            String(channelId)
+        );
+
+      if (!channel) {
         return send(
           chatId,
           "کانال پیدا نشد."
         );
       }
 
-      states.set(String(uid), {
-        step: "poster",
-        chatId,
-        channel: ch
-      });
+      states.set(
+        String(uid),
+        {
+          step: "poster",
+          chatId,
+          channel
+        }
+      );
 
       return send(
         chatId,
-        "مرحله ۱/۱۰\nپوستر فیلم را به صورت عکس بفرست."
+        "مرحله ۱/۸\n\nپوستر فیلم را به صورت عکس ارسال کن."
       );
     }
 
     return;
   }
 
+  /* =========================
+     MESSAGE
+  ========================= */
 
-  /* ---------- Message ---------- */
+  const msg =
+    update.message;
 
-  const msg = update.message;
+  if (!msg) {
+    return;
+  }
 
-  if (!msg) return;
+  const uid =
+    msg.from?.id;
 
-  const uid = msg.from?.id;
-  const chatId = msg.chat.id;
+  const chatId =
+    msg.chat.id;
 
-  if (!uid) return;
-
+  if (!uid) {
+    return;
+  }
 
   /* =========================
      START
   ========================= */
 
-  if (msg.text?.startsWith("/start")) {
-
-    const arg = msg.text.split(/\s+/)[1];
-
-    if (
-      arg &&
-      arg.startsWith("download_")
-    ) {
-      return sendDownload(
-        chatId,
-        arg.slice(9)
-      );
-    }
+  if (
+    msg.text &&
+    msg.text.startsWith("/start")
+  ) {
 
     if (isAdmin(uid)) {
       return startMenu(
@@ -227,21 +301,23 @@ async function handle(update) {
     );
   }
 
-
   /* =========================
      CANCEL
   ========================= */
 
-  if (msg.text === "/cancel") {
+  if (
+    msg.text === "/cancel"
+  ) {
 
-    states.delete(String(uid));
+    states.delete(
+      String(uid)
+    );
 
     return send(
       chatId,
       "عملیات لغو شد."
     );
   }
-
 
   /* =========================
      MENU
@@ -251,15 +327,15 @@ async function handle(update) {
     msg.text === "/menu" &&
     isAdmin(uid)
   ) {
+
     return startMenu(
       chatId,
       uid
     );
   }
 
-
   /* =========================
-     ADMINS
+     ADD ADMIN
   ========================= */
 
   if (
@@ -267,10 +343,13 @@ async function handle(update) {
     String(uid) === OWNER_ID
   ) {
 
-    states.set(String(uid), {
-      step: "addadmin",
-      chatId
-    });
+    states.set(
+      String(uid),
+      {
+        step: "addadmin",
+        chatId
+      }
+    );
 
     return send(
       chatId,
@@ -278,16 +357,22 @@ async function handle(update) {
     );
   }
 
+  /* =========================
+     DELETE ADMIN
+  ========================= */
 
   if (
     msg.text === "/deladmin" &&
     String(uid) === OWNER_ID
   ) {
 
-    states.set(String(uid), {
-      step: "deladmin",
-      chatId
-    });
+    states.set(
+      String(uid),
+      {
+        step: "deladmin",
+        chatId
+      }
+    );
 
     return send(
       chatId,
@@ -295,6 +380,9 @@ async function handle(update) {
     );
   }
 
+  /* =========================
+     LIST ADMINS
+  ========================= */
 
   if (
     msg.text === "/admins" &&
@@ -303,16 +391,19 @@ async function handle(update) {
 
     return send(
       chatId,
-      `مالک: ${OWNER_ID}\n\nادمین‌ها:\n${
-        [...admins].join("\n") ||
-        "موردی ثبت نشده."
-      }`
+      `مالک: ${escapeHTML(OWNER_ID)}
+
+ادمین‌ها:
+
+${
+  [...admins].map(escapeHTML).join("\n") ||
+  "موردی ثبت نشده."
+}`
     );
   }
 
-
   /* =========================
-     CHANNELS
+     ADD CHANNEL
   ========================= */
 
   if (
@@ -320,234 +411,364 @@ async function handle(update) {
     isAdmin(uid)
   ) {
 
-    states.set(String(uid), {
-      step: "addchannel",
-      chatId
-    });
+    states.set(
+      String(uid),
+      {
+        step: "addchannel",
+        chatId
+      }
+    );
 
     return send(
       chatId,
-      "یوزرنیم کانال را بفرست؛ مثلاً @JadoMovie\nربات باید در کانال ادمین باشد."
+      "یوزرنیم کانال را بفرست.\n\nمثال:\n@JadoMovie\n\nربات باید در کانال ادمین باشد."
     );
   }
 
+  /* =========================
+     LIST CHANNELS
+  ========================= */
 
   if (
     msg.text === "/channels" &&
     isAdmin(uid)
   ) {
 
-    return send(
-      chatId,
+    const list =
       [...channels.values()]
         .map(
-          c => `${c.title} — ${c.username}`
+          channel =>
+            `${escapeHTML(
+              channel.title
+            )} — ${escapeHTML(
+              channel.username
+            )}`
         )
-        .join("\n")
-    );
-  }
-
-
-  /* =========================
-     EMOJI SAMPLE
-  ========================= */
-
-  if (
-    msg.text === "/emoji" &&
-    isAdmin(uid)
-  ) {
-
-    states.set(String(uid), {
-      step: "emoji_sample",
-      chatId
-    });
+        .join("\n");
 
     return send(
       chatId,
-      "حالا پست نمونه‌ای که ایموجی‌های پریمیوم دارد را برای ربات فوروارد کن."
+      list || "کانالی ثبت نشده."
     );
   }
 
-
   /* =========================
-     Admin Check
+     ADMIN CHECK
   ========================= */
 
-  if (!isAdmin(uid)) return;
+  if (!isAdmin(uid)) {
+    return;
+  }
 
+  const state =
+    states.get(String(uid));
 
-  const st = states.get(String(uid));
-
-  if (!st) return;
-
+  if (!state) {
+    return;
+  }
 
   /* =========================
      POSTER
   ========================= */
 
   if (
-    st.step === "poster" &&
-    msg.photo?.length
+    state.step === "poster" &&
+    msg.photo &&
+    msg.photo.length
   ) {
 
-    st.poster =
+    state.poster =
       msg.photo[
         msg.photo.length - 1
       ].file_id;
 
-    st.step = "fa";
+    state.step = "year";
 
     states.set(
       String(uid),
-      st
+      state
     );
 
     return send(
       chatId,
-      "مرحله ۲/۱۰\nنام فارسی فیلم را بفرست."
+      "مرحله ۲/۸\n\nسال ساخت فیلم را بفرست.\n\nمثال: 2026"
     );
   }
 
-
-  /* =========================
-     TEXT STEPS
-  ========================= */
-
-  const textSteps = [
-
-    [
-      "fa",
-      "سال انتشار را بفرست.",
-      "year"
-    ],
-
-    [
-      "year",
-      "نام انگلیسی فیلم را بفرست.",
-      "en"
-    ],
-
-    [
-      "en",
-      "امتیاز IMDb را بفرست؛ مثلاً 6.6",
-      "imdb"
-    ],
-
-    [
-      "imdb",
-      "کشور سازنده را بفرست.",
-      "country"
-    ],
-
-    [
-      "country",
-      "ژانر را بفرست.",
-      "genre"
-    ],
-
-    [
-      "genre",
-      "خلاصه داستان را بفرست.",
-      "summary"
-    ]
-
-  ];
-
-
-  for (
-    const [step, prompt, next]
-    of textSteps
+  if (
+    state.step === "poster"
   ) {
 
-    if (
-      st.step === step &&
-      msg.text
-    ) {
+    return send(
+      chatId,
+      "لطفاً پوستر را به صورت عکس ارسال کن."
+    );
+  }
 
-      st[step] =
-        msg.text.trim();
+  /* =========================
+     YEAR
+  ========================= */
 
-      st.step = next;
+  if (
+    state.step === "year" &&
+    msg.text
+  ) {
 
-      states.set(
-        String(uid),
-        st
-      );
+    const year =
+      msg.text.trim();
+
+    if (!/^\d{4}$/.test(year)) {
 
       return send(
         chatId,
-        prompt
+        "سال ساخت باید چهار رقمی باشد.\n\nمثال: 2026"
       );
     }
+
+    state.year = year;
+    state.step = "en";
+
+    states.set(
+      String(uid),
+      state
+    );
+
+    return send(
+      chatId,
+      "مرحله ۳/۸\n\nاسم انگلیسی فیلم را بفرست."
+    );
   }
 
+  /* =========================
+     ENGLISH NAME
+  ========================= */
+
+  if (
+    state.step === "en" &&
+    msg.text
+  ) {
+
+    const name =
+      msg.text.trim();
+
+    if (!name) {
+
+      return send(
+        chatId,
+        "اسم انگلیسی فیلم نمی‌تواند خالی باشد."
+      );
+    }
+
+    state.en = name;
+    state.step = "imdb";
+
+    states.set(
+      String(uid),
+      state
+    );
+
+    return send(
+      chatId,
+      "مرحله ۴/۸\n\nامتیاز IMDb را بفرست.\n\nمثال: 6.6"
+    );
+  }
+
+  /* =========================
+     IMDb
+  ========================= */
+
+  if (
+    state.step === "imdb" &&
+    msg.text
+  ) {
+
+    const imdb =
+      msg.text
+        .trim()
+        .replace(",", ".");
+
+    const imdbNumber =
+      Number(imdb);
+
+    if (
+      !Number.isFinite(imdbNumber) ||
+      imdbNumber < 0 ||
+      imdbNumber > 10
+    ) {
+
+      return send(
+        chatId,
+        "امتیاز IMDb معتبر نیست.\n\nمثال: 6.6"
+      );
+    }
+
+    state.imdb =
+      imdb;
+
+    state.step =
+      "country";
+
+    states.set(
+      String(uid),
+      state
+    );
+
+    return send(
+      chatId,
+      "مرحله ۵/۸\n\nکشور سازنده را بفرست."
+    );
+  }
+
+  /* =========================
+     COUNTRY
+  ========================= */
+
+  if (
+    state.step === "country" &&
+    msg.text
+  ) {
+
+    const country =
+      msg.text.trim();
+
+    if (!country) {
+
+      return send(
+        chatId,
+        "کشور سازنده نمی‌تواند خالی باشد."
+      );
+    }
+
+    state.country =
+      country;
+
+    state.step =
+      "genre";
+
+    states.set(
+      String(uid),
+      state
+    );
+
+    return send(
+      chatId,
+      "مرحله ۶/۸\n\nژانر را بفرست.\n\nمثال:\nاکشن، هیجان‌انگیز، کمدی"
+    );
+  }
+
+  /* =========================
+     GENRE
+  ========================= */
+
+  if (
+    state.step === "genre" &&
+    msg.text
+  ) {
+
+    const genre =
+      msg.text.trim();
+
+    if (!genre) {
+
+      return send(
+        chatId,
+        "ژانر نمی‌تواند خالی باشد."
+      );
+    }
+
+    state.genre =
+      genre;
+
+    state.step =
+      "summary";
+
+    states.set(
+      String(uid),
+      state
+    );
+
+    return send(
+      chatId,
+      "مرحله ۷/۸\n\nخلاصه داستان را بفرست."
+    );
+  }
 
   /* =========================
      SUMMARY
   ========================= */
 
   if (
-    st.step === "summary" &&
+    state.step === "summary" &&
     msg.text
   ) {
 
-    st.summary =
+    const summary =
       msg.text.trim();
 
-    st.step = "type";
+    if (!summary) {
+
+      return send(
+        chatId,
+        "خلاصه داستان نمی‌تواند خالی باشد."
+      );
+    }
+
+    state.summary =
+      summary;
+
+    state.step =
+      "type";
 
     states.set(
       String(uid),
-      st
+      state
     );
 
     return send(
       chatId,
-      "نوع دانلود را انتخاب کن:",
+      "مرحله ۸/۸\n\nنوع دانلود را انتخاب کن:",
       {
         reply_markup: {
           keyboard: [
-
             [
               {
                 text: "فقط زیرنویس"
               }
             ],
-
             [
               {
                 text: "فقط دوبله"
               }
             ],
-
             [
               {
                 text: "هر دو"
               }
             ],
-
             [
               {
                 text: "/cancel"
               }
             ]
-
           ],
-          resize_keyboard: true
+          resize_keyboard: true,
+          one_time_keyboard: true
         }
       }
     );
   }
-
 
   /* =========================
      DOWNLOAD TYPE
   ========================= */
 
   if (
-    st.step === "type" &&
+    state.step === "type" &&
     msg.text
   ) {
+
+    const type =
+      msg.text.trim();
 
     const allowed = [
       "فقط زیرنویس",
@@ -556,233 +777,190 @@ async function handle(update) {
     ];
 
     if (
-      !allowed.includes(msg.text)
+      !allowed.includes(type)
     ) {
 
       return send(
         chatId,
-        "یکی از گزینه‌ها را انتخاب کن."
+        "یکی از گزینه‌های زیر را انتخاب کن:\n\nفقط زیرنویس\nفقط دوبله\nهر دو"
       );
     }
 
+    state.type =
+      type;
 
-    st.type = msg.text;
+    /*
+      حذف کیبورد
+    */
 
+    const removeKeyboard = {
+      reply_markup: {
+        remove_keyboard: true
+      }
+    };
 
     /* فقط زیرنویس */
 
     if (
-      msg.text === "فقط زیرنویس"
+      type === "فقط زیرنویس"
     ) {
 
-      st.step = "sub";
+      state.step =
+        "sub";
 
       states.set(
         String(uid),
-        st
+        state
       );
 
       return send(
         chatId,
-        "🔤 لینک دانلود زیرنویس فارسی را ارسال کن.\n\nمثال:\nhttps://example.com/subtitle"
+        "لینک دانلود زیرنویس فارسی را ارسال کن.",
+        removeKeyboard
       );
     }
-
 
     /* فقط دوبله */
 
     if (
-      msg.text === "فقط دوبله"
+      type === "فقط دوبله"
     ) {
 
-      st.step = "dub";
+      state.step =
+        "dub";
 
       states.set(
         String(uid),
-        st
+        state
       );
 
       return send(
         chatId,
-        "🔊 لینک دانلود دوبله فارسی را ارسال کن.\n\nمثال:\nhttps://example.com/dub"
+        "لینک دانلود دوبله فارسی را ارسال کن.",
+        removeKeyboard
       );
     }
 
-
     /* هر دو */
 
-    st.step = "sub";
+    state.step =
+      "sub";
 
     states.set(
       String(uid),
-      st
+      state
     );
 
     return send(
       chatId,
-      "🔤 لینک دانلود زیرنویس فارسی را ارسال کن.\n\nمثال:\nhttps://example.com/subtitle"
+      "اول لینک دانلود زیرنویس فارسی را ارسال کن.",
+      removeKeyboard
     );
   }
-
 
   /* =========================
      SUBTITLE LINK
   ========================= */
 
   if (
-    st.step === "sub" &&
+    state.step === "sub" &&
     msg.text
   ) {
 
     const url =
       msg.text.trim();
 
-
-    if (!validUrl(url)) {
+    if (!validURL(url)) {
 
       return send(
         chatId,
-        "❌ لینک معتبر نیست.\n\nلطفاً لینک زیرنویس فارسی را با http:// یا https:// ارسال کن."
+        "❌ لینک معتبر نیست.\n\nلطفاً لینک را با http:// یا https:// ارسال کن."
       );
     }
 
+    state.sub =
+      url;
 
-    st.sub = url;
-
-
-    /* اگر هر دو انتخاب شده */
+    /*
+      اگر هر دو انتخاب شده باشد،
+      حالا لینک دوبله گرفته می‌شود.
+    */
 
     if (
-      st.type === "هر دو"
+      state.type === "هر دو"
     ) {
 
-      st.step = "dub";
+      state.step =
+        "dub";
 
       states.set(
         String(uid),
-        st
+        state
       );
 
       return send(
         chatId,
-        "🔊 حالا لینک دانلود دوبله فارسی را ارسال کن."
+        "حالا لینک دانلود دوبله فارسی را ارسال کن."
       );
     }
 
-
-    /* فقط زیرنویس */
-
     return publish(
       uid,
-      st
+      state
     );
   }
-
 
   /* =========================
      DUB LINK
   ========================= */
 
   if (
-    st.step === "dub" &&
+    state.step === "dub" &&
     msg.text
   ) {
 
     const url =
       msg.text.trim();
 
-
-    if (!validUrl(url)) {
+    if (!validURL(url)) {
 
       return send(
         chatId,
-        "❌ لینک معتبر نیست.\n\nلطفاً لینک دوبله فارسی را با http:// یا https:// ارسال کن."
+        "❌ لینک معتبر نیست.\n\nلطفاً لینک را با http:// یا https:// ارسال کن."
       );
     }
 
-
-    st.dub = url;
-
+    state.dub =
+      url;
 
     return publish(
       uid,
-      st
+      state
     );
   }
-
-
-  /* =========================
-     PREMIUM EMOJI
-  ========================= */
-
-  if (
-    st.step === "emoji_sample"
-  ) {
-
-    const entities = [
-      ...(msg.entities || []),
-      ...(msg.caption_entities || [])
-    ]
-      .filter(
-        e => e.type === "custom_emoji"
-      );
-
-
-    const ids = [
-      ...new Set(
-        entities.map(
-          e => e.custom_emoji_id
-        )
-      )
-    ];
-
-
-    if (!ids.length) {
-
-      return send(
-        chatId,
-        "ایموجی پریمیوم قابل تشخیص پیدا نشد. پست نمونه را با Forward بفرست."
-      );
-    }
-
-
-    emojiSamples.set(
-      String(uid),
-      ids
-    );
-
-    states.delete(
-      String(uid)
-    );
-
-
-    return send(
-      chatId,
-      `ایموجی‌های پریمیوم پیدا شد:\n\n${
-        ids
-          .map(
-            (x, i) =>
-              `${i + 1}. ${x}`
-          )
-          .join("\n")
-      }\n\nذخیره شد. برای ساخت پست /menu را بزن.`
-    );
-  }
-
 
   /* =========================
      ADD ADMIN
   ========================= */
 
   if (
-    st.step === "addadmin" &&
+    state.step === "addadmin" &&
     msg.text &&
     String(uid) === OWNER_ID
   ) {
 
-    admins.add(
-      msg.text.trim()
-    );
+    const id =
+      msg.text.trim();
+
+    if (!/^\d+$/.test(id)) {
+
+      return send(
+        chatId,
+        "آیدی عددی معتبر بفرست."
+      );
+    }
+
+    admins.add(id);
 
     states.delete(
       String(uid)
@@ -790,24 +968,24 @@ async function handle(update) {
 
     return send(
       chatId,
-      "ادمین اضافه شد ✅"
+      "ادمین با موفقیت اضافه شد ✅"
     );
   }
-
 
   /* =========================
      DELETE ADMIN
   ========================= */
 
   if (
-    st.step === "deladmin" &&
+    state.step === "deladmin" &&
     msg.text &&
     String(uid) === OWNER_ID
   ) {
 
-    admins.delete(
-      msg.text.trim()
-    );
+    const id =
+      msg.text.trim();
+
+    admins.delete(id);
 
     states.delete(
       String(uid)
@@ -815,213 +993,364 @@ async function handle(update) {
 
     return send(
       chatId,
-      "ادمین حذف شد ✅"
+      "ادمین با موفقیت حذف شد ✅"
     );
   }
-
 
   /* =========================
      ADD CHANNEL
   ========================= */
 
   if (
-    st.step === "addchannel" &&
+    state.step === "addchannel" &&
     msg.text
   ) {
 
     const username =
       msg.text.trim();
 
-    const r = await tg(
-      "getChat",
-      {
-        chat_id: username
-      }
-    );
+    const result =
+      await tg(
+        "getChat",
+        {
+          chat_id: username
+        }
+      );
 
-
-    if (!r.ok) {
+    if (!result.ok) {
 
       return send(
         chatId,
-        "کانال پیدا نشد یا ربات دسترسی ندارد."
+        "کانال پیدا نشد یا ربات دسترسی ندارد.\n\nمطمئن شو ربات در کانال ادمین است."
       );
     }
 
-
-    const c = {
-
-      id: r.result.id,
+    const channel = {
+      id: result.result.id,
 
       username:
-        r.result.username
-          ? "@" + r.result.username
+        result.result.username
+          ? "@" +
+            result.result.username
           : username,
 
       title:
-        r.result.title ||
+        result.result.title ||
         username
-
     };
 
-
     channels.set(
-      String(c.id),
-      c
+      String(channel.id),
+      channel
     );
 
     states.delete(
       String(uid)
     );
 
-
     return send(
       chatId,
-      `کانال «${c.title}» اضافه شد ✅\nربات باید در کانال ادمین باشد.`
+      `کانال «${escapeHTML(
+        channel.title
+      )}» با موفقیت اضافه شد ✅`
     );
   }
 }
 
-
 /* =========================
-   Publish Post
+   Build Post
 ========================= */
 
-async function publish(uid, st) {
-
-  const links = [];
-
-
-  /* Subtitle */
-
-  if (st.sub) {
-
-    links.push(
-      `<a href="${escAttr(st.sub)}"><b>🔤 زیرنویس فارسی</b></a>`
-    );
-  }
-
-
-  /* Dub */
-
-  if (st.dub) {
-
-    links.push(
-      `<a href="${escAttr(st.dub)}"><b>🔊 دوبله فارسی</b></a>`
-    );
-  }
-
+function buildPost(state) {
 
   const channelName =
-    (
-      st.channel.username ||
+    String(
+      state.channel?.username ||
       DEFAULT_CHANNEL
     ).replace(/^@/, "");
 
-
-  const post =
-
-`<b>🎬 فیلم : ${esc(st.fa)} ${esc(st.year)}</b>
-<b>🎞 Movie : ${esc(st.en)} | IMDb ${esc(st.imdb)}</b>
-<b>🌍 کشور : ${esc(st.country)}</b>
-<b>🎭 ژانر : ${esc(st.genre)}</b>
-
-<blockquote><b>📖 ${esc(st.summary)}</b></blockquote>
-
-${links.join("\n")}
-
-<b>📢 @${esc(channelName)}</b>`;
-
-
-  const r = await tg(
-    "sendPhoto",
-    {
-      chat_id: st.channel.id,
-
-      photo: st.poster,
-
-      caption: post,
-
-      parse_mode: "HTML"
-    }
-  );
-
-
-  states.delete(
-    String(uid)
-  );
-
-
-  return send(
-    st.chatId || uid,
-
-    r.ok
-      ? "پست با موفقیت در کانال منتشر شد ✅"
-      : "انتشار ناموفق بود ❌\nمطمئن شو ربات در کانال ادمین است."
-  );
-}
-
-
-/* =========================
-   Old download system
-   Kept for existing links
-========================= */
-
-function saveDownload(
-  file_id,
-  name,
-  type
-) {
-
-  const key =
-    crypto
-      .randomBytes(10)
-      .toString("hex");
-
-
-  downloads.set(
-    key,
-    {
-      file_id,
-      name,
-      type
-    }
-  );
-
-
-  return key;
-}
-
-
-function sendDownload(
-  chatId,
-  key
-) {
-
-  const d =
-    downloads.get(key);
-
-
-  if (!d) {
-
-    return send(
-      chatId,
-      "این لینک منقضی یا نامعتبر است."
+  const filmEmoji =
+    premiumEmoji(
+      EMOJI.film,
+      "🎬"
     );
+
+  const movieEmoji =
+    premiumEmoji(
+      EMOJI.movie,
+      "🎞️"
+    );
+
+  const countryEmoji =
+    premiumEmoji(
+      EMOJI.country,
+      "🌍"
+    );
+
+  const genreEmoji =
+    premiumEmoji(
+      EMOJI.genre,
+      "🎭"
+    );
+
+  const summaryEmoji =
+    premiumEmoji(
+      EMOJI.summary,
+      "💬"
+    );
+
+  const subtitleEmoji =
+    premiumEmoji(
+      EMOJI.subtitle,
+      "🔤"
+    );
+
+  const dubEmoji =
+    premiumEmoji(
+      EMOJI.dub,
+      "🎙️"
+    );
+
+  const downloadEmoji =
+    premiumEmoji(
+      EMOJI.download,
+      "⬇️"
+    );
+
+  const imdbEmoji =
+    premiumEmoji(
+      EMOJI.imdb,
+      "⭐"
+    );
+
+  const channelEmoji =
+    premiumEmoji(
+      EMOJI.channel,
+      "📣"
+    );
+
+  /*
+    بخش اول پست
+  */
+
+  const lines = [];
+
+  lines.push(
+    `<b>${filmEmoji} فیلم : ${escapeHTML(
+      state.en
+    )} ${escapeHTML(
+      state.year
+    )}</b>`
+  );
+
+  lines.push(
+    `<b>${movieEmoji} | Movie : ${escapeHTML(
+      state.en
+    )} | ${imdbEmoji} ${escapeHTML(
+      state.imdb
+    )}</b>`
+  );
+
+  lines.push("");
+
+  lines.push(
+    `<b>${countryEmoji} محصول : ${escapeHTML(
+      state.country
+    )}</b>`
+  );
+
+  lines.push(
+    `<b>${genreEmoji} ژانر : ${escapeHTML(
+      state.genre
+    )}</b>`
+  );
+
+  lines.push("");
+
+  /*
+    خلاصه داستان
+  */
+
+  const summaryPrefix =
+    `<blockquote><b>${summaryEmoji} خلاصه داستان : `;
+
+  const summarySuffix =
+    `</b></blockquote>`;
+
+  /*
+    لینک‌ها
+  */
+
+  let downloadSection = "";
+
+  if (state.sub) {
+
+    downloadSection +=
+      `${subtitleEmoji} <b>زیرنویس فارسی :</b>\n`;
+
+    downloadSection +=
+      `${downloadEmoji} <a href="${escapeAttribute(
+        state.sub
+      )}">برای دانلود اینجا کلیک کنید</a>\n`;
   }
 
+  if (state.dub) {
 
-  return tg(
-    "sendDocument",
-    {
-      chat_id: chatId,
-      document: d.file_id,
-      caption:
-        `${d.type}\n${d.name}`
+    if (downloadSection) {
+      downloadSection += "\n";
     }
+
+    downloadSection +=
+      `${dubEmoji} <b>دوبله فارسی :</b>\n`;
+
+    downloadSection +=
+      `${downloadEmoji} <a href="${escapeAttribute(
+        state.dub
+      )}">برای دانلود اینجا کلیک کنید</a>\n`;
+  }
+
+  /*
+    کپشن Telegram حداکثر 1024 کاراکتر است.
+    برای اطمینان، خلاصه را کوتاه می‌کنیم.
+  */
+
+  const footer =
+    `${channelEmoji} @${escapeHTML(
+      channelName
+    )}`;
+
+  const fixed =
+    lines.join("\n").length +
+    summaryPrefix.length +
+    summarySuffix.length +
+    downloadSection.length +
+    footer.length +
+    100;
+
+  const maxSummary =
+    Math.max(
+      100,
+      1024 - fixed
+    );
+
+  let summary =
+    String(
+      state.summary || ""
+    ).trim();
+
+  if (
+    summary.length >
+    maxSummary
+  ) {
+
+    summary =
+      summary
+        .slice(
+          0,
+          maxSummary - 3
+        )
+        .trimEnd() +
+      "...";
+  }
+
+  lines.push(
+    `${summaryPrefix}${escapeHTML(
+      summary
+    )}${summarySuffix}`
   );
+
+  lines.push("");
+
+  if (downloadSection) {
+    lines.push(
+      downloadSection.trimEnd()
+    );
+
+    lines.push("");
+  }
+
+  lines.push(
+    footer
+  );
+
+  return lines.join("\n");
 }
 
+/* =========================
+   Publish
+========================= */
+
+async function publish(
+  uid,
+  state
+) {
+
+  try {
+
+    const caption =
+      buildPost(state);
+
+    const result =
+      await tg(
+        "sendPhoto",
+        {
+          chat_id:
+            state.channel.id,
+
+          photo:
+            state.poster,
+
+          caption,
+
+          parse_mode:
+            "HTML"
+        }
+      );
+
+    states.delete(
+      String(uid)
+    );
+
+    if (result.ok) {
+
+      return send(
+        state.chatId || uid,
+        "پست با موفقیت در کانال منتشر شد ✅"
+      );
+    }
+
+    console.error(
+      "Publish Error:",
+      result.description
+    );
+
+    return send(
+      state.chatId || uid,
+      `انتشار ناموفق بود ❌
+
+${escapeHTML(
+  result.description ||
+  "خطای نامشخص"
+)}`
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Publish Exception:",
+      error
+    );
+
+    return send(
+      state.chatId || uid,
+      `هنگام انتشار خطا رخ داد ❌
+
+${escapeHTML(
+  error.message
+)}`
+    );
+  }
+}
 
 /* =========================
    Webhook
@@ -1035,11 +1364,10 @@ async function setWebhook(
     "setWebhook",
     {
       url:
-        baseUrl + "/webhook"
+        `${baseUrl}/webhook`
     }
   );
 }
-
 
 /* =========================
    HTTP Server
@@ -1047,11 +1375,16 @@ async function setWebhook(
 
 const server =
   http.createServer(
-    async (req, res) => {
+    async (
+      req,
+      res
+    ) => {
 
       try {
 
-        /* HOME */
+        /* =========================
+           HOME
+        ========================= */
 
         if (
           req.method === "GET" &&
@@ -1071,37 +1404,43 @@ const server =
           );
         }
 
-
-        /* SETUP */
+        /* =========================
+           SETUP WEBHOOK
+        ========================= */
 
         if (
           req.method === "GET" &&
           req.url === "/setup"
         ) {
 
-          const base =
+          const baseUrl =
             `https://${req.headers.host}`;
 
-          const r =
-            await setWebhook(base);
-
+          const result =
+            await setWebhook(
+              baseUrl
+            );
 
           res.writeHead(
-            r.ok ? 200 : 500,
+            result.ok
+              ? 200
+              : 500,
             {
               "content-type":
-                "application/json"
+                "application/json; charset=utf-8"
             }
           );
 
-
           return res.end(
-            JSON.stringify(r)
+            JSON.stringify(
+              result
+            )
           );
         }
 
-
-        /* WEBHOOK */
+        /* =========================
+           WEBHOOK
+        ========================= */
 
         if (
           req.method === "POST" &&
@@ -1110,14 +1449,12 @@ const server =
 
           let body = "";
 
-
           req.on(
             "data",
             chunk => {
               body += chunk;
             }
           );
-
 
           req.on(
             "end",
@@ -1128,41 +1465,53 @@ const server =
                 const update =
                   JSON.parse(body);
 
-                await handle(update);
+                await handle(
+                  update
+                );
 
-              } catch (e) {
+              } catch (error) {
 
                 console.error(
-                  "Webhook error:",
-                  e
+                  "Webhook Error:",
+                  error
                 );
               }
 
+              res.writeHead(
+                200
+              );
 
-              res.writeHead(200);
-
-              res.end("ok");
+              res.end(
+                "ok"
+              );
             }
           );
-
 
           return;
         }
 
+        /* =========================
+           NOT FOUND
+        ========================= */
 
-        /* NOT FOUND */
-
-        res.writeHead(404);
+        res.writeHead(
+          404
+        );
 
         res.end(
           "Not found"
         );
 
-      } catch (e) {
+      } catch (error) {
 
-        console.error(e);
+        console.error(
+          "Server Error:",
+          error
+        );
 
-        res.writeHead(500);
+        res.writeHead(
+          500
+        );
 
         res.end(
           "Server error"
@@ -1171,6 +1520,9 @@ const server =
     }
   );
 
+/* =========================
+   Start Server
+========================= */
 
 server.listen(
   PORT,
