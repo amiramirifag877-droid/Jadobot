@@ -1,0 +1,12 @@
+{
+  "name": "jadomovie-bot",
+  "version": "1.0.0",
+  "description": "JadoMovie Telegram management bot for Render",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
