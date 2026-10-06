@@ -19,11 +19,10 @@ const http = require("http");
   Premium Emoji فعال است.
 */
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const OWNER_ID = String(process.env.OWNER_ID || "8639455918");
-const DEFAULT_CHANNEL = process.env.DEFAULT_CHANNEL || "@JadoMovie";
-const PORT = Number(process.env.PORT || 10000);
-
+const BOT_TOKEN = "8802340831:AAHdNczEj3G8wJhH0KtCsPMvqXPH6iNIRoY";
+const OWNER_ID = "8639455918";
+const DEFAULT_CHANNEL = "@JadoMovie";
+const PORT = 10000;
 /* =========================
    Premium Emoji IDs
 ========================= */
