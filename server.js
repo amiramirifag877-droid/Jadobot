@@ -2,10 +2,9 @@ const http = require("http");
 const crypto = require("crypto");
 
 /*
-  JadoMovie Bot
-  ارسال به گروه/سوپرگروه با Premium Custom Emoji
+  توکن فعلی رباتت را اینجا قرار بده.
+  برای نسخه نهایی بهتر است از Environment Variable در Render استفاده شود.
 */
-
 const BOT_TOKEN =
   process.env.BOT_TOKEN || "8802340831:AAHdNczEj3G8wJhH0KtCsPMvqXPH6iNIRoY";
 
@@ -30,6 +29,9 @@ const states = new Map();
 const downloads = new Map();
 const emojiSamples = new Map();
 
+// گروه واسطی که پست پریمیوم ابتدا در آن ارسال می‌شود.
+let premiumGroup = null;
+
 const PORT = process.env.PORT || 10000;
 
 
@@ -53,7 +55,6 @@ async function tg(method, body = {}) {
     return await r.json();
   } catch (e) {
     console.error("Telegram API error:", e);
-
     return {
       ok: false,
       description: e.message
@@ -89,44 +90,24 @@ function escAttr(s) {
 }
 
 function validUrl(url) {
-  return /^https?:\/\/\S+$/i.test(
-    String(url || "").trim()
-  );
+  return /^https?:\/\/\S+$/i.test(String(url || "").trim());
 }
 
-
-/*
-  Telegram entity offset/length
-  بر اساس UTF-16 است.
-*/
-
 function utf16Length(s) {
-  return [...String(s ?? "")].reduce(
-    (n, ch) =>
-      n +
-      (ch.codePointAt(0) > 0xffff ? 2 : 1),
+  return Array.from(String(s ?? "")).reduce(
+    (n, ch) => n + (ch.codePointAt(0) > 0xFFFF ? 2 : 1),
     0
   );
 }
 
-
-function utf16Slice(
-  s,
-  start,
-  length
-) {
-  const arr = Array.from(
-    String(s ?? "")
-  );
-
+function utf16Slice(s, start, length) {
+  const chars = Array.from(String(s ?? ""));
   let pos = 0;
   let out = "";
 
-  for (const ch of arr) {
+  for (const ch of chars) {
     const size =
-      ch.codePointAt(0) > 0xffff
-        ? 2
-        : 1;
+      ch.codePointAt(0) > 0xFFFF ? 2 : 1;
 
     if (
       pos >= start &&
@@ -137,17 +118,13 @@ function utf16Slice(
 
     pos += size;
 
-    if (
-      pos >=
-      start + length
-    ) {
+    if (pos >= start + length) {
       break;
     }
   }
 
   return out;
 }
-
 
 function addEntity(
   entities,
@@ -166,11 +143,6 @@ function addEntity(
   }
 }
 
-
-/* =========================
-   Build JadoMovie Caption
-========================= */
-
 function buildJadoCaption(
   st,
   emojiList
@@ -178,144 +150,94 @@ function buildJadoCaption(
   const entities = [];
   let text = "";
 
-  function append(value) {
-    const start =
-      utf16Length(text);
-
+  const append = value => {
+    const offset = utf16Length(text);
     text += value;
+    return offset;
+  };
 
-    return start;
-  }
-
-  function appendBold(value) {
-    const start =
-      append(value);
+  const bold = value => {
+    const offset = append(value);
 
     addEntity(
       entities,
       "bold",
-      start,
+      offset,
       utf16Length(value)
     );
+  };
 
-    return start;
-  }
+  const ce = (
+    index,
+    fallback
+  ) => {
+    const item = emojiList[index];
 
-  function appendCustom(
-    fallback,
-    customEmojiId
-  ) {
-    const start =
-      append(fallback);
+    if (!item) {
+      return append(fallback);
+    }
+
+    const fb =
+      item.fallback || fallback;
+
+    const offset = append(fb);
 
     addEntity(
       entities,
       "custom_emoji",
-      start,
-      utf16Length(fallback),
+      offset,
+      utf16Length(fb),
       {
         custom_emoji_id:
-          String(customEmojiId)
+          String(item.id)
       }
     );
+  };
 
-    return start;
-  }
-
-  function emoji(
-    index,
-    fallback
-  ) {
-    const item =
-      emojiList?.[index];
-
-    if (item) {
-      return appendCustom(
-        item.fallback ||
-          fallback,
-        item.id
-      );
-    }
-
-    return append(fallback);
-  }
-
-
-  /* =====================
-     فیلم
-  ===================== */
-
-  emoji(0, "🎬");
-
+  ce(0, "🎬");
   append(" ");
-
-  appendBold(
+  bold(
     `فیلم : ${st.fa} | ${st.year}`
   );
-
   append("\n");
 
-
-  /* =====================
-     Movie
-  ===================== */
-
-  emoji(1, "🎞");
-
+  ce(1, "🎞");
   append(" ");
 
-  appendBold(
+  bold(
     `| Movie : ${st.en} | IMDb `
   );
 
-  emoji(2, "⭐");
+  ce(2, "⭐");
 
-  append(` ${st.imdb}`);
+  bold(
+    ` ${st.imdb}`
+  );
 
   append("\n");
 
-
-  /* =====================
-     Country
-  ===================== */
-
-  emoji(3, "🌍");
-
+  ce(3, "🌍");
   append(" ");
 
-  appendBold(
+  bold(
     `کشور : ${st.country}`
   );
 
   append("\n");
 
-
-  /* =====================
-     Genre
-  ===================== */
-
-  emoji(4, "🎭");
-
+  ce(4, "🎭");
   append(" ");
 
-  appendBold(
+  bold(
     `ژانر : ${st.genre}`
   );
 
   append("\n\n");
 
+  const blockStart =
+    append("▌ ");
 
-  /* =====================
-     Story
-  ===================== */
-
-  const storyStart =
-    utf16Length(text);
-
-  append("▌ ");
-
-  emoji(5, "📖");
-
+  ce(5, "📖");
   append(" ");
 
   const story =
@@ -326,34 +248,23 @@ function buildJadoCaption(
   addEntity(
     entities,
     "blockquote",
-    storyStart,
-    utf16Length(
-      text.slice(
-        0,
-        text.length
-      )
-    ) -
-      storyStart
+    blockStart,
+    utf16Length(text) - blockStart
   );
 
   append("\n\n");
-
-
-  /* =====================
-     Subtitle
-  ===================== */
 
   if (st.sub) {
     const label =
       "🔤 زیرنویس فارسی";
 
-    const start =
+    const offset =
       append(label);
 
     addEntity(
       entities,
       "text_link",
-      start,
+      offset,
       utf16Length(label),
       {
         url: st.sub
@@ -363,22 +274,17 @@ function buildJadoCaption(
     append("\n");
   }
 
-
-  /* =====================
-     Dubbed
-  ===================== */
-
   if (st.dub) {
     const label =
       "🔊 دوبله فارسی";
 
-    const start =
+    const offset =
       append(label);
 
     addEntity(
       entities,
       "text_link",
-      start,
+      offset,
       utf16Length(label),
       {
         url: st.dub
@@ -388,32 +294,20 @@ function buildJadoCaption(
     append("\n");
   }
 
-
   append("\n");
 
-
-  /* =====================
-     Channel
-  ===================== */
-
-  appendBold(
+  bold(
     `📢 @${String(
       st.channel.username ||
       DEFAULT_CHANNEL
     ).replace(/^@/, "")}`
   );
 
-
   return {
     text,
     entities
   };
 }
-
-
-/* =========================
-   Send Message
-========================= */
 
 async function send(
   chatId,
@@ -465,7 +359,7 @@ async function startMenu(
 
   return send(
     chatId,
-    "مقصد انتشار پست را انتخاب کن:",
+    "مقصد انتشار پست را انتخاب کن (گروه یا کانال):",
     {
       reply_markup: {
         inline_keyboard:
@@ -482,18 +376,18 @@ async function startMenu(
 
 async function handle(update) {
 
-  /* =====================
-     Callback
-  ===================== */
+  /* ---------- Callback ---------- */
 
   if (update.callback_query) {
+
     const q =
       update.callback_query;
 
     await tg(
       "answerCallbackQuery",
       {
-        callback_query_id: q.id
+        callback_query_id:
+          q.id
       }
     );
 
@@ -512,6 +406,7 @@ async function handle(update) {
         "channel:"
       )
     ) {
+
       const key =
         q.data.slice(8);
 
@@ -520,14 +415,13 @@ async function handle(update) {
           ...channels.values()
         ].find(
           c =>
-            String(c.id) ===
-            key
+            String(c.id) === key
         );
 
       if (!ch) {
         return send(
           chatId,
-          "مقصد پیدا نشد."
+          "کانال پیدا نشد."
         );
       }
 
@@ -550,14 +444,14 @@ async function handle(update) {
   }
 
 
-  /* =====================
-     Message
-  ===================== */
+  /* ---------- Message ---------- */
 
   const msg =
     update.message;
 
-  if (!msg) return;
+  if (!msg) {
+    return;
+  }
 
   const uid =
     msg.from?.id;
@@ -565,18 +459,21 @@ async function handle(update) {
   const chatId =
     msg.chat.id;
 
-  if (!uid) return;
+  if (!uid) {
+    return;
+  }
 
 
-  /* =====================
+  /* =========================
      START
-  ===================== */
+  ========================= */
 
   if (
     msg.text?.startsWith(
       "/start"
     )
   ) {
+
     const arg =
       msg.text.split(
         /\s+/
@@ -594,7 +491,9 @@ async function handle(update) {
       );
     }
 
-    if (isAdmin(uid)) {
+    if (
+      isAdmin(uid)
+    ) {
       return startMenu(
         chatId,
         uid
@@ -608,14 +507,15 @@ async function handle(update) {
   }
 
 
-  /* =====================
+  /* =========================
      CANCEL
-  ===================== */
+  ========================= */
 
   if (
     msg.text ===
     "/cancel"
   ) {
+
     states.delete(
       String(uid)
     );
@@ -627,14 +527,15 @@ async function handle(update) {
   }
 
 
-  /* =====================
+  /* =========================
      MENU
-  ===================== */
+  ========================= */
 
   if (
     msg.text === "/menu" &&
     isAdmin(uid)
   ) {
+
     return startMenu(
       chatId,
       uid
@@ -642,9 +543,9 @@ async function handle(update) {
   }
 
 
-  /* =====================
-     ADD ADMIN
-  ===================== */
+  /* =========================
+     ADMINS
+  ========================= */
 
   if (
     msg.text ===
@@ -652,6 +553,7 @@ async function handle(update) {
     String(uid) ===
       OWNER_ID
   ) {
+
     states.set(
       String(uid),
       {
@@ -667,16 +569,13 @@ async function handle(update) {
   }
 
 
-  /* =====================
-     DELETE ADMIN
-  ===================== */
-
   if (
     msg.text ===
       "/deladmin" &&
     String(uid) ===
       OWNER_ID
   ) {
+
     states.set(
       String(uid),
       {
@@ -692,36 +591,33 @@ async function handle(update) {
   }
 
 
-  /* =====================
-     ADMINS
-  ===================== */
-
   if (
-    msg.text === "/admins" &&
+    msg.text ===
+      "/admins" &&
     String(uid) ===
       OWNER_ID
   ) {
+
     return send(
       chatId,
       `مالک: ${OWNER_ID}\n\nادمین‌ها:\n${
-        [...admins].join(
-          "\n"
-        ) ||
+        [...admins].join("\n") ||
         "موردی ثبت نشده."
       }`
     );
   }
 
 
-  /* =====================
-     ADD CHANNEL
-  ===================== */
+  /* =========================
+     CHANNELS
+  ========================= */
 
   if (
     msg.text ===
       "/addchannel" &&
     isAdmin(uid)
   ) {
+
     states.set(
       String(uid),
       {
@@ -732,20 +628,17 @@ async function handle(update) {
 
     return send(
       chatId,
-      "یوزرنیم کانال را بفرست؛ مثلاً @JadoMovie\nبرای گروه از /addgroup استفاده کن."
+      "یوزرنیم کانال را بفرست؛ مثلاً @JadoMovie\nبرای گروه از /addgroup استفاده کن.\nربات باید در کانال ادمین باشد."
     );
   }
 
-
-  /* =====================
-     ADD GROUP
-  ===================== */
 
   if (
     msg.text ===
       "/addgroup" &&
     isAdmin(uid)
   ) {
+
     states.set(
       String(uid),
       {
@@ -756,20 +649,17 @@ async function handle(update) {
 
     return send(
       chatId,
-      "یوزرنیم گروه/سوپرگروه را بفرست؛ مثلاً @JadoMovieGroup\nربات باید در گروه اجازه ارسال پیام داشته باشد."
+      "یوزرنیم یا آیدی گروه/سوپرگروه را بفرست؛ مثلاً @JadoMovieGroup\nربات باید اجازه ارسال پیام داشته باشد."
     );
   }
 
-
-  /* =====================
-     CHANNELS / GROUPS
-  ===================== */
 
   if (
     msg.text ===
       "/channels" &&
     isAdmin(uid)
   ) {
+
     return send(
       chatId,
       [...channels.values()]
@@ -782,55 +672,71 @@ async function handle(update) {
   }
 
 
-  /* =====================
-     PREMIUM EMOJI
-  ===================== */
+  if (
+    msg.text === "/group" &&
+    isAdmin(uid)
+  ) {
+
+    return send(
+      chatId,
+      premiumGroup
+        ? `گروه واسط فعلی: ${premiumGroup.title} — ${premiumGroup.username}`
+        : "هنوز گروه واسط ثبت نشده است.\n\nبرای ثبت: /addgroup"
+    );
+  }
+
+
+  /* =========================
+     EMOJI SAMPLE
+  ========================= */
 
   if (
     msg.text === "/emoji" &&
     isAdmin(uid)
   ) {
+
     states.set(
       String(uid),
       {
-        step:
-          "emoji_sample",
+        step: "emoji_sample",
         chatId
       }
     );
 
     return send(
       chatId,
-      "حالا پست نمونه‌ای که ایموجی‌های پریمیوم دارد را مستقیم برای ربات بفرست یا فوروارد کن."
+      "حالا پست نمونه‌ای که ایموجی‌های پریمیوم دارد را برای ربات فوروارد کن."
     );
   }
 
 
-  /* =====================
-     ADMIN CHECK
-  ===================== */
+  /* =========================
+     Admin Check
+  ========================= */
 
   if (!isAdmin(uid)) {
     return;
   }
-
 
   const st =
     states.get(
       String(uid)
     );
 
-  if (!st) return;
+  if (!st) {
+    return;
+  }
 
 
-  /* =====================
+  /* =========================
      POSTER
-  ===================== */
+  ========================= */
 
   if (
     st.step === "poster" &&
     msg.photo?.length
   ) {
+
     st.poster =
       msg.photo[
         msg.photo.length - 1
@@ -850,9 +756,9 @@ async function handle(update) {
   }
 
 
-  /* =====================
+  /* =========================
      TEXT STEPS
-  ===================== */
+  ========================= */
 
   const textSteps = [
 
@@ -928,19 +834,21 @@ async function handle(update) {
   }
 
 
-  /* =====================
+  /* =========================
      SUMMARY
-  ===================== */
+  ========================= */
 
   if (
     st.step ===
       "summary" &&
     msg.text
   ) {
+
     st.summary =
       msg.text.trim();
 
-    st.step = "type";
+    st.step =
+      "type";
 
     states.set(
       String(uid),
@@ -992,9 +900,9 @@ async function handle(update) {
   }
 
 
-  /* =====================
+  /* =========================
      DOWNLOAD TYPE
-  ===================== */
+  ========================= */
 
   if (
     st.step === "type" &&
@@ -1012,6 +920,7 @@ async function handle(update) {
         msg.text
       )
     ) {
+
       return send(
         chatId,
         "یکی از گزینه‌ها را انتخاب کن."
@@ -1022,10 +931,13 @@ async function handle(update) {
       msg.text;
 
 
+    /* فقط زیرنویس */
+
     if (
       msg.text ===
       "فقط زیرنویس"
     ) {
+
       st.step =
         "sub";
 
@@ -1036,15 +948,18 @@ async function handle(update) {
 
       return send(
         chatId,
-        "🔤 لینک دانلود زیرنویس فارسی را ارسال کن."
+        "🔤 لینک دانلود زیرنویس فارسی را ارسال کن.\n\nمثال:\nhttps://example.com/subtitle"
       );
     }
 
+
+    /* فقط دوبله */
 
     if (
       msg.text ===
       "فقط دوبله"
     ) {
+
       st.step =
         "dub";
 
@@ -1055,10 +970,12 @@ async function handle(update) {
 
       return send(
         chatId,
-        "🔊 لینک دانلود دوبله فارسی را ارسال کن."
+        "🔊 لینک دانلود دوبله فارسی را ارسال کن.\n\nمثال:\nhttps://example.com/dub"
       );
     }
 
+
+    /* هر دو */
 
     st.step =
       "sub";
@@ -1070,14 +987,14 @@ async function handle(update) {
 
     return send(
       chatId,
-      "🔤 لینک دانلود زیرنویس فارسی را ارسال کن."
+      "🔤 لینک دانلود زیرنویس فارسی را ارسال کن.\n\nمثال:\nhttps://example.com/subtitle"
     );
   }
 
 
-  /* =====================
-     SUBTITLE
-  ===================== */
+  /* =========================
+     SUBTITLE LINK
+  ========================= */
 
   if (
     st.step === "sub" &&
@@ -1087,21 +1004,24 @@ async function handle(update) {
     const url =
       msg.text.trim();
 
-    if (
-      !validUrl(url)
-    ) {
+    if (!validUrl(url)) {
+
       return send(
         chatId,
-        "❌ لینک معتبر نیست."
+        "❌ لینک معتبر نیست.\n\nلطفاً لینک زیرنویس فارسی را با http:// یا https:// ارسال کن."
       );
     }
 
     st.sub =
       url;
 
+
+    /* اگر هر دو انتخاب شده */
+
     if (
       st.type === "هر دو"
     ) {
+
       st.step =
         "dub";
 
@@ -1116,6 +1036,9 @@ async function handle(update) {
       );
     }
 
+
+    /* فقط زیرنویس */
+
     return publish(
       uid,
       st
@@ -1123,9 +1046,9 @@ async function handle(update) {
   }
 
 
-  /* =====================
-     DUB
-  ===================== */
+  /* =========================
+     DUB LINK
+  ========================= */
 
   if (
     st.step === "dub" &&
@@ -1135,12 +1058,11 @@ async function handle(update) {
     const url =
       msg.text.trim();
 
-    if (
-      !validUrl(url)
-    ) {
+    if (!validUrl(url)) {
+
       return send(
         chatId,
-        "❌ لینک معتبر نیست."
+        "❌ لینک معتبر نیست.\n\nلطفاً لینک دوبله فارسی را با http:// یا https:// ارسال کن."
       );
     }
 
@@ -1154,9 +1076,9 @@ async function handle(update) {
   }
 
 
-  /* =====================
-     PREMIUM EMOJI SAMPLE
-  ===================== */
+  /* =========================
+     PREMIUM EMOJI
+  ========================= */
 
   if (
     st.step ===
@@ -1184,85 +1106,74 @@ async function handle(update) {
           b.offset
       );
 
+    const samples = [];
+    const seen =
+      new Set();
 
-    const samples =
-      entities.map(e => ({
-        id:
-          String(
-            e.custom_emoji_id
-          ),
+    for (
+      const e of entities
+    ) {
 
+      const id =
+        String(
+          e.custom_emoji_id
+        );
+
+      if (
+        seen.has(id)
+      ) {
+        continue;
+      }
+
+      seen.add(id);
+
+      samples.push({
+        id,
         fallback:
           utf16Slice(
             sourceText,
             e.offset,
             e.length
           ) || "😀"
-      }));
-
-
-    const unique = [];
-    const seen =
-      new Set();
-
-
-    for (
-      const item of samples
-    ) {
-      if (
-        !seen.has(
-          item.id
-        )
-      ) {
-        seen.add(
-          item.id
-        );
-
-        unique.push(
-          item
-        );
-      }
+      });
     }
 
-
     if (
-      !unique.length
+      !samples.length
     ) {
+
       return send(
         chatId,
-        "ایموجی پریمیوم قابل تشخیص پیدا نشد.\nپست نمونه را مستقیم برای ربات بفرست یا فوروارد کن."
+        "ایموجی پریمیوم قابل تشخیص پیدا نشد. پست نمونه را مستقیم یا با Forward بفرست."
       );
     }
 
-
     emojiSamples.set(
       String(uid),
-      unique
+      samples
     );
-
 
     states.delete(
       String(uid)
     );
 
-
     return send(
       chatId,
-      `ایموجی‌های پریمیوم پیدا شد:\n\n${
-        unique
+      `ایموجی‌های پریمیوم پیدا شد و ذخیره شد ✅\n\n${
+        samples
           .map(
             (x, i) =>
-              `${i + 1}. ${x.fallback} → ${x.id}`
+              `${i + 1}. ${x.fallback}`
           )
           .join("\n")
-      }\n\nذخیره شد. برای ساخت پست /menu را بزن.`
+      }\n\nحالا /menu را بزن.`
     );
   }
 
 
-  /* =====================
+  /* =========================
      ADD ADMIN
-  ===================== */
+  ========================= */
 
   if (
     st.step ===
@@ -1287,9 +1198,9 @@ async function handle(update) {
   }
 
 
-  /* =====================
+  /* =========================
      DELETE ADMIN
-  ===================== */
+  ========================= */
 
   if (
     st.step ===
@@ -1314,9 +1225,9 @@ async function handle(update) {
   }
 
 
-  /* =====================
+  /* =========================
      ADD CHANNEL / GROUP
-  ===================== */
+  ========================= */
 
   if (
     (
@@ -1331,7 +1242,6 @@ async function handle(update) {
     const username =
       msg.text.trim();
 
-
     const r =
       await tg(
         "getChat",
@@ -1341,14 +1251,13 @@ async function handle(update) {
         }
       );
 
-
     if (!r.ok) {
+
       return send(
         chatId,
-        "مقصد پیدا نشد یا ربات دسترسی ندارد."
+        "کانال یا گروه پیدا نشد یا ربات دسترسی ندارد."
       );
     }
-
 
     const c = {
 
@@ -1368,33 +1277,54 @@ async function handle(update) {
     };
 
 
+    /* GROUP */
+
+    if (
+      st.step ===
+        "addgroup"
+    ) {
+
+      premiumGroup =
+        {
+          id: c.id,
+          username:
+            c.username,
+          title:
+            c.title
+        };
+
+      states.delete(
+        String(uid)
+      );
+
+      return send(
+        chatId,
+        `گروه واسط «${c.title}» ثبت شد ✅\n\nاز این به بعد پست ابتدا در این گروه با Premium Emoji ارسال می‌شود و بعد ربات تلاش می‌کند همان پیام را به کانال کپی کند.`
+      );
+    }
+
+
+    /* CHANNEL */
+
     channels.set(
       String(c.id),
       c
     );
 
-
     states.delete(
       String(uid)
     );
 
-
     return send(
       chatId,
-
-      st.step ===
-        "addgroup"
-
-        ? `گروه «${c.title}» اضافه شد ✅\nربات باید در گروه اجازه ارسال پیام داشته باشد.`
-
-        : `کانال «${c.title}» اضافه شد ✅\nربات باید در کانال ادمین باشد.`
+      `کانال «${c.title}» اضافه شد ✅\nربات باید در کانال ادمین باشد.`
     );
   }
 }
 
 
 /* =========================
-   Publish
+   Publish Post
 ========================= */
 
 async function publish(
@@ -1402,11 +1332,21 @@ async function publish(
   st
 ) {
 
+  const replyChatId =
+    st.chatId || uid;
+
+  if (!premiumGroup) {
+
+    return send(
+      replyChatId,
+      "❌ هنوز گروه واسط ثبت نشده است.\n\nاول ربات را داخل گروه/سوپرگروه موردنظر ادمین کن، سپس /addgroup را بزن و گروه را ثبت کن."
+    );
+  }
+
   const emojiList =
     emojiSamples.get(
       String(uid)
     ) || [];
-
 
   const built =
     buildJadoCaption(
@@ -1415,12 +1355,17 @@ async function publish(
     );
 
 
-  const r =
+  /*
+    1) ارسال مستقیم به گروه.
+    اینجا Premium Emoji استفاده می‌شود.
+  */
+
+  const groupPost =
     await tg(
       "sendPhoto",
       {
         chat_id:
-          st.channel.id,
+          premiumGroup.id,
 
         photo:
           st.poster,
@@ -1434,31 +1379,72 @@ async function publish(
     );
 
 
+  if (
+    !groupPost.ok ||
+    !groupPost.result?.message_id
+  ) {
+
+    return send(
+      replyChatId,
+      `❌ ارسال به گروه واسط ناموفق بود.\n\n${
+        groupPost.description ||
+        "خطای نامشخص"
+      }`
+    );
+  }
+
+
+  /*
+    2) تلاش برای کپی همان پیام
+       از گروه به کانال.
+  */
+
+  const copied =
+    await tg(
+      "copyMessage",
+      {
+        chat_id:
+          st.channel.id,
+
+        from_chat_id:
+          premiumGroup.id,
+
+        message_id:
+          groupPost.result
+            .message_id
+      }
+    );
+
+
   states.delete(
     String(uid)
   );
 
 
+  if (copied.ok) {
+
+    return send(
+      replyChatId,
+      `پست ابتدا با Premium Emoji در «${premiumGroup.title}» ارسال شد و سپس به «${
+        st.channel.title ||
+        "کانال"
+      }» کپی شد ✅\n\nاگر Premium Emoji در کانال نمایش داده نشد، یعنی Telegram کپی ربات→کانال را برای این نوع Emoji نپذیرفته است.`
+    );
+  }
+
+
   return send(
-    st.chatId || uid,
-
-    r.ok
-
-      ? `پست با موفقیت در «${
-          st.channel.title ||
-          "گروه"
-        }» منتشر شد ✅`
-
-      : `انتشار ناموفق بود ❌\n\n${
-          r.description ||
-          "خطای نامشخص"
-        }`
+    replyChatId,
+    `⚠️ پست با Premium Emoji در گروه «${premiumGroup.title}» ارسال شد، اما کپی خودکار به کانال ناموفق بود.\n\nخطای Telegram:\n${
+      copied.description ||
+      "خطای نامشخص"
+    }\n\nپست داخل گروه باقی مانده و می‌توانی همان پیام را دستی به کانال Forward کنی.`
   );
 }
 
 
 /* =========================
-   Download System
+   Old download system
 ========================= */
 
 function saveDownload(
@@ -1472,7 +1458,6 @@ function saveDownload(
       .randomBytes(10)
       .toString("hex");
 
-
   downloads.set(
     key,
     {
@@ -1481,7 +1466,6 @@ function saveDownload(
       type
     }
   );
-
 
   return key;
 }
@@ -1495,14 +1479,13 @@ function sendDownload(
   const d =
     downloads.get(key);
 
-
   if (!d) {
+
     return send(
       chatId,
       "این لینک منقضی یا نامعتبر است."
     );
   }
-
 
   return tg(
     "sendDocument",
@@ -1591,7 +1574,6 @@ const server =
               base
             );
 
-
           res.writeHead(
             r.ok ? 200 : 500,
             {
@@ -1599,7 +1581,6 @@ const server =
                 "application/json"
             }
           );
-
 
           return res.end(
             JSON.stringify(r)
@@ -1618,14 +1599,12 @@ const server =
 
           let body = "";
 
-
           req.on(
             "data",
             chunk => {
               body += chunk;
             }
           );
-
 
           req.on(
             "end",
@@ -1650,7 +1629,6 @@ const server =
                 );
               }
 
-
               res.writeHead(
                 200
               );
@@ -1660,7 +1638,6 @@ const server =
               );
             }
           );
-
 
           return;
         }
