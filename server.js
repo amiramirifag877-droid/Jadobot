@@ -1,940 +1,471 @@
 const http = require("http");
 const crypto = require("crypto");
 
-/* =========================================================
-   JadoMovie Publisher Bot
-   ========================================================= */
+/*
+  JadoMovie Bot
+  ارسال به گروه/سوپرگروه با Premium Custom Emoji
+*/
 
 const BOT_TOKEN =
-  process.env.BOT_TOKEN ||
-  "8802340831:AAHdNczEj3G8wJhH0KtCsPMvqXPH6iNIRoY";
+  process.env.BOT_TOKEN || "8802340831:AAHdNczEj3G8wJhH0KtCsPMvqXPH6iNIRoY";
 
 const OWNER_ID = "8639455918";
+const BOT_USERNAME = "Managerjadomutbot";
+const DEFAULT_CHANNEL = "@JadoMovie";
 
-const BOT_USERNAME =
-  "Managerjadomutbot";
+const admins = new Set();
 
-const DEFAULT_CHANNEL =
-  "@JadoMovie";
-
-const PORT =
-  Number(process.env.PORT || 10000);
-
-
-/* =========================================================
-   STORAGE
-   ========================================================= */
-
-const admins =
-  new Set();
-
-const states =
-  new Map();
-
-const channels =
-  new Map();
-
-const downloads =
-  new Map();
-
-/*
-  Premium Emoji هایی که از پیام نمونه
-  تشخیص داده می‌شوند.
-
-  ساختار:
-
-  {
-    id: "5937999673510858217",
-    emoji: "🎬"
-  }
-*/
-let premiumEmojis = [];
-
-
-/* =========================================================
-   DEFAULT CHANNEL
-   ========================================================= */
-
-channels.set(
-  DEFAULT_CHANNEL,
-  {
-    id: DEFAULT_CHANNEL,
-    username: DEFAULT_CHANNEL,
-    title: "JadoMovie"
-  }
-);
-
-
-/* =========================================================
-   FALLBACK PREMIUM EMOJIS
-   اگر هنوز نمونه نفرستاده باشی
-   ========================================================= */
-
-const FALLBACK_EMOJIS = [
-  {
-    id: "5937999673510858217",
-    emoji: "🎬"
-  },
-  {
-    id: "5911002797578396680",
-    emoji: "🎞️"
-  },
-  {
-    id: "5987875234638730248",
-    emoji: "🌐"
-  },
-  {
-    id: "6032625495328165724",
-    emoji: "🎭"
-  },
-  {
-    id: "5886436057091673541",
-    emoji: "💬"
-  },
-  {
-    id: "5870753782874246579",
-    emoji: "✍️"
-  },
-  {
-    id: "5258336354642697821",
-    emoji: "🎙️"
-  },
-  {
-    id: "5877468380125990242",
-    emoji: "📣"
-  },
-  {
-    id: "5897554554894946515",
-    emoji: "⬇️"
-  },
-  {
-    id: "6028346797368283073",
-    emoji: "⭐"
-  }
-];
-
-
-/* =========================================================
-   TELEGRAM API
-   ========================================================= */
-
-async function tg(
-  method,
-  body = {}
-) {
-
-  try {
-
-    const response =
-      await fetch(
-        `https://api.telegram.org/bot${BOT_TOKEN}/${method}`,
-        {
-          method: "POST",
-
-          headers: {
-            "content-type":
-              "application/json"
-          },
-
-          body:
-            JSON.stringify(body)
-        }
-      );
-
-    const data =
-      await response.json();
-
-    if (!data.ok) {
-
-      console.error(
-        `Telegram API Error [${method}]:`,
-        data.description
-      );
-
+const channels = new Map([
+  [
+    DEFAULT_CHANNEL,
+    {
+      id: DEFAULT_CHANNEL,
+      username: DEFAULT_CHANNEL,
+      title: "JadoMovie"
     }
+  ]
+]);
 
-    return data;
+const states = new Map();
+const downloads = new Map();
+const emojiSamples = new Map();
 
-  } catch (error) {
+const PORT = process.env.PORT || 10000;
 
-    console.error(
-      "Telegram API Error:",
-      error
+
+/* =========================
+   Telegram API
+========================= */
+
+async function tg(method, body = {}) {
+  try {
+    const r = await fetch(
+      `https://api.telegram.org/bot${BOT_TOKEN}/${method}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(body)
+      }
     );
+
+    return await r.json();
+  } catch (e) {
+    console.error("Telegram API error:", e);
 
     return {
       ok: false,
-      description:
-        error.message
+      description: e.message
     };
   }
 }
 
 
-/* =========================================================
-   HELPERS
-   ========================================================= */
+/* =========================
+   Helpers
+========================= */
 
 function isAdmin(id) {
-
   return (
     String(id) === OWNER_ID ||
     admins.has(String(id))
   );
-
 }
 
-
-function esc(value) {
-
-  return String(
-    value ?? ""
-  )
-    .replace(
-      /&/g,
-      "&amp;"
-    )
-    .replace(
-      /</g,
-      "&lt;"
-    )
-    .replace(
-      />/g,
-      "&gt;"
-    );
-
+function esc(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
-
-function escAttr(value) {
-
-  return String(
-    value ?? ""
-  )
-    .replace(
-      /&/g,
-      "&amp;"
-    )
-    .replace(
-      /"/g,
-      "&quot;"
-    )
-    .replace(
-      /</g,
-      "&lt;"
-    )
-    .replace(
-      />/g,
-      "&gt;"
-    );
-
+function escAttr(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
-
-function validUrl(
-  url
-) {
-
+function validUrl(url) {
   return /^https?:\/\/\S+$/i.test(
-    String(
-      url || ""
-    ).trim()
+    String(url || "").trim()
+  );
+}
+
+
+/*
+  Telegram entity offset/length
+  بر اساس UTF-16 است.
+*/
+
+function utf16Length(s) {
+  return [...String(s ?? "")].reduce(
+    (n, ch) =>
+      n +
+      (ch.codePointAt(0) > 0xffff ? 2 : 1),
+    0
+  );
+}
+
+
+function utf16Slice(
+  s,
+  start,
+  length
+) {
+  const arr = Array.from(
+    String(s ?? "")
   );
 
+  let pos = 0;
+  let out = "";
+
+  for (const ch of arr) {
+    const size =
+      ch.codePointAt(0) > 0xffff
+        ? 2
+        : 1;
+
+    if (
+      pos >= start &&
+      pos < start + length
+    ) {
+      out += ch;
+    }
+
+    pos += size;
+
+    if (
+      pos >=
+      start + length
+    ) {
+      break;
+    }
+  }
+
+  return out;
 }
 
+
+function addEntity(
+  entities,
+  type,
+  offset,
+  length,
+  extra = {}
+) {
+  if (length > 0) {
+    entities.push({
+      type,
+      offset,
+      length,
+      ...extra
+    });
+  }
+}
+
+
+/* =========================
+   Build JadoMovie Caption
+========================= */
+
+function buildJadoCaption(
+  st,
+  emojiList
+) {
+  const entities = [];
+  let text = "";
+
+  function append(value) {
+    const start =
+      utf16Length(text);
+
+    text += value;
+
+    return start;
+  }
+
+  function appendBold(value) {
+    const start =
+      append(value);
+
+    addEntity(
+      entities,
+      "bold",
+      start,
+      utf16Length(value)
+    );
+
+    return start;
+  }
+
+  function appendCustom(
+    fallback,
+    customEmojiId
+  ) {
+    const start =
+      append(fallback);
+
+    addEntity(
+      entities,
+      "custom_emoji",
+      start,
+      utf16Length(fallback),
+      {
+        custom_emoji_id:
+          String(customEmojiId)
+      }
+    );
+
+    return start;
+  }
+
+  function emoji(
+    index,
+    fallback
+  ) {
+    const item =
+      emojiList?.[index];
+
+    if (item) {
+      return appendCustom(
+        item.fallback ||
+          fallback,
+        item.id
+      );
+    }
+
+    return append(fallback);
+  }
+
+
+  /* =====================
+     فیلم
+  ===================== */
+
+  emoji(0, "🎬");
+
+  append(" ");
+
+  appendBold(
+    `فیلم : ${st.fa} | ${st.year}`
+  );
+
+  append("\n");
+
+
+  /* =====================
+     Movie
+  ===================== */
+
+  emoji(1, "🎞");
+
+  append(" ");
+
+  appendBold(
+    `| Movie : ${st.en} | IMDb `
+  );
+
+  emoji(2, "⭐");
+
+  append(` ${st.imdb}`);
+
+  append("\n");
+
+
+  /* =====================
+     Country
+  ===================== */
+
+  emoji(3, "🌍");
+
+  append(" ");
+
+  appendBold(
+    `کشور : ${st.country}`
+  );
+
+  append("\n");
+
+
+  /* =====================
+     Genre
+  ===================== */
+
+  emoji(4, "🎭");
+
+  append(" ");
+
+  appendBold(
+    `ژانر : ${st.genre}`
+  );
+
+  append("\n\n");
+
+
+  /* =====================
+     Story
+  ===================== */
+
+  const storyStart =
+    utf16Length(text);
+
+  append("▌ ");
+
+  emoji(5, "📖");
+
+  append(" ");
+
+  const story =
+    String(st.summary || "");
+
+  append(story);
+
+  addEntity(
+    entities,
+    "blockquote",
+    storyStart,
+    utf16Length(
+      text.slice(
+        0,
+        text.length
+      )
+    ) -
+      storyStart
+  );
+
+  append("\n\n");
+
+
+  /* =====================
+     Subtitle
+  ===================== */
+
+  if (st.sub) {
+    const label =
+      "🔤 زیرنویس فارسی";
+
+    const start =
+      append(label);
+
+    addEntity(
+      entities,
+      "text_link",
+      start,
+      utf16Length(label),
+      {
+        url: st.sub
+      }
+    );
+
+    append("\n");
+  }
+
+
+  /* =====================
+     Dubbed
+  ===================== */
+
+  if (st.dub) {
+    const label =
+      "🔊 دوبله فارسی";
+
+    const start =
+      append(label);
+
+    addEntity(
+      entities,
+      "text_link",
+      start,
+      utf16Length(label),
+      {
+        url: st.dub
+      }
+    );
+
+    append("\n");
+  }
+
+
+  append("\n");
+
+
+  /* =====================
+     Channel
+  ===================== */
+
+  appendBold(
+    `📢 @${String(
+      st.channel.username ||
+      DEFAULT_CHANNEL
+    ).replace(/^@/, "")}`
+  );
+
+
+  return {
+    text,
+    entities
+  };
+}
+
+
+/* =========================
+   Send Message
+========================= */
 
 async function send(
   chatId,
   text,
   extra = {}
 ) {
-
   return tg(
     "sendMessage",
     {
-      chat_id:
-        chatId,
-
+      chat_id: chatId,
       text,
-
-      parse_mode:
-        "HTML",
-
+      parse_mode: "HTML",
       ...extra
     }
   );
-
 }
 
 
-/* =========================================================
-   PREMIUM EMOJI DETECTION
-   ========================================================= */
-
-/*
-  Telegram در Message این اطلاعات را می‌دهد:
-
-  entities: [
-    {
-      type: "custom_emoji",
-      offset: ...,
-      length: ...,
-      custom_emoji_id: "..."
-    }
-  ]
-
-  ما ID و Emoji جایگزین را از همان پیام استخراج می‌کنیم.
-*/
-
-function extractPremiumEmojis(
-  msg
-) {
-
-  const entities = [
-    ...(msg.entities || []),
-    ...(msg.caption_entities || [])
-  ]
-    .filter(
-      entity =>
-        entity.type ===
-        "custom_emoji"
-    );
-
-  if (!entities.length) {
-    return [];
-  }
-
-  const text =
-    msg.text ||
-    msg.caption ||
-    "";
-
-  const result = [];
-
-  for (
-    const entity of entities
-  ) {
-
-    if (
-      !entity.custom_emoji_id
-    ) {
-      continue;
-    }
-
-    /*
-      offset و length تلگرام
-      بر اساس UTF-16 هستند و
-      JavaScript String نیز همین
-      واحد را استفاده می‌کند.
-    */
-
-    const emoji =
-      text.slice(
-        entity.offset,
-        entity.offset +
-          entity.length
-      );
-
-    result.push({
-      id:
-        String(
-          entity.custom_emoji_id
-        ),
-
-      emoji:
-        emoji || "⭐"
-    });
-
-  }
-
-  return result;
-}
-
-
-/*
-  تشخیص خودکار Premium Emoji
-*/
-
-function detectAndSavePremiumEmojis(
-  msg
-) {
-
-  const detected =
-    extractPremiumEmojis(
-      msg
-    );
-
-  if (!detected.length) {
-    return false;
-  }
-
-  /*
-    جلوگیری از duplicate
-  */
-
-  const map =
-    new Map();
-
-  for (
-    const item of [
-      ...premiumEmojis,
-      ...detected
-    ]
-  ) {
-
-    if (
-      !map.has(item.id)
-    ) {
-
-      map.set(
-        item.id,
-        item
-      );
-
-    }
-
-  }
-
-  premiumEmojis =
-    [...map.values()]
-      .slice(0, 10);
-
-  return true;
-}
-
-
-/*
-  اگر هنوز نمونه‌ای ارسال نشده،
-  از IDهایی که خودت دادی استفاده می‌کنیم.
-*/
-
-function getPremiumEmoji(
-  index
-) {
-
-  const source =
-    premiumEmojis.length
-      ? premiumEmojis
-      : FALLBACK_EMOJIS;
-
-  return (
-    source[index] ||
-    FALLBACK_EMOJIS[index] ||
-    {
-      id: "",
-      emoji: "⭐"
-    }
-  );
-}
-
-
-/* =========================================================
-   CAPTION ENTITY BUILDER
-   ========================================================= */
-
-function createCaptionBuilder() {
-
-  let text = "";
-
-  const entities = [];
-
-  function add(
-    value
-  ) {
-
-    text +=
-      String(value);
-
-  }
-
-
-  function addEntity(
-    value,
-    type,
-    extra = {}
-  ) {
-
-    const start =
-      text.length;
-
-    const valueText =
-      String(value);
-
-    text +=
-      valueText;
-
-    entities.push({
-      type,
-
-      offset:
-        start,
-
-      length:
-        valueText.length,
-
-      ...extra
-    });
-
-  }
-
-
-  function addPremium(
-    emoji,
-    customEmojiId
-  ) {
-
-    const value =
-      emoji || "⭐";
-
-    const start =
-      text.length;
-
-    text +=
-      value;
-
-    entities.push({
-      type:
-        "custom_emoji",
-
-      offset:
-        start,
-
-      length:
-        value.length,
-
-      custom_emoji_id:
-        String(
-          customEmojiId
-        )
-    });
-
-  }
-
-
-  return {
-    get text() {
-      return text;
-    },
-
-    get entities() {
-      return entities;
-    },
-
-    add,
-
-    addEntity,
-
-    addPremium
-  };
-
-}
-
-
-/* =========================================================
-   CREATE POST CAPTION
-   ========================================================= */
-
-function buildPost(
-  state
-) {
-
-  /*
-    Premium Emoji mapping
-
-    0 = فیلم
-    1 = Movie
-    2 = محصول
-    3 = ژانر
-    4 = خلاصه
-    5 = زیرنویس
-    6 = دوبله
-    7 = کانال
-    8 = دانلود
-    9 = IMDb
-  */
-
-  const eFilm =
-    getPremiumEmoji(0);
-
-  const eMovie =
-    getPremiumEmoji(1);
-
-  const eCountry =
-    getPremiumEmoji(2);
-
-  const eGenre =
-    getPremiumEmoji(3);
-
-  const eSummary =
-    getPremiumEmoji(4);
-
-  const eSubtitle =
-    getPremiumEmoji(5);
-
-  const eDub =
-    getPremiumEmoji(6);
-
-  const eChannel =
-    getPremiumEmoji(7);
-
-  const eDownload =
-    getPremiumEmoji(8);
-
-  const eImdb =
-    getPremiumEmoji(9);
-
-
-  const builder =
-    createCaptionBuilder();
-
-
-  /* =====================================================
-     خط اول
-
-     🎬 فیلم : نام فارسی | 2026
-     ===================================================== */
-
-  builder.addPremium(
-    eFilm.emoji,
-    eFilm.id
-  );
-
-  builder.add(
-    " فیلم : "
-  );
-
-  builder.addEntity(
-    state.fa,
-    "bold"
-  );
-
-  builder.add(
-    " | "
-  );
-
-  builder.addEntity(
-    state.year,
-    "bold"
-  );
-
-
-  builder.add(
-    "\n"
-  );
-
-
-  /* =====================================================
-     خط دوم
-
-     🎞️ | Movie : English | IMDb ⭐ 6.6
-     ===================================================== */
-
-  builder.addPremium(
-    eMovie.emoji,
-    eMovie.id
-  );
-
-  builder.add(
-    " | Movie : "
-  );
-
-  builder.addEntity(
-    state.en,
-    "bold"
-  );
-
-  builder.add(
-    " | IMDb "
-  );
-
-  builder.addPremium(
-    eImdb.emoji,
-    eImdb.id
-  );
-
-  builder.add(
-    " "
-  );
-
-  builder.addEntity(
-    state.imdb,
-    "bold"
-  );
-
-
-  builder.add(
-    "\n\n"
-  );
-
-
-  /* =====================================================
-     محصول
-     ===================================================== */
-
-  builder.addPremium(
-    eCountry.emoji,
-    eCountry.id
-  );
-
-  builder.add(
-    " محصول : "
-  );
-
-  builder.addEntity(
-    state.country,
-    "bold"
-  );
-
-
-  builder.add(
-    "\n"
-  );
-
-
-  /* =====================================================
-     ژانر
-     ===================================================== */
-
-  builder.addPremium(
-    eGenre.emoji,
-    eGenre.id
-  );
-
-  builder.add(
-    " ژانر : "
-  );
-
-  builder.addEntity(
-    state.genre,
-    "bold"
-  );
-
-
-  builder.add(
-    "\n\n"
-  );
-
-
-  /* =====================================================
-     خلاصه داستان
-
-     با Blockquote
-     ===================================================== */
-
-  const quoteStart =
-    builder.text.length;
-
-  builder.addPremium(
-    eSummary.emoji,
-    eSummary.id
-  );
-
-  builder.add(
-    " خلاصه داستان : "
-  );
-
-  builder.addEntity(
-    state.summary,
-    "bold"
-  );
-
-  const quoteLength =
-    builder.text.length -
-    quoteStart;
-
-  builder.entities.push({
-    type:
-      "blockquote",
-
-    offset:
-      quoteStart,
-
-    length:
-      quoteLength
-  });
-
-
-  builder.add(
-    "\n\n"
-  );
-
-
-  /* =====================================================
-     زیرنویس
-     ===================================================== */
-
-  if (state.sub) {
-
-    builder.addPremium(
-      eSubtitle.emoji,
-      eSubtitle.id
-    );
-
-    builder.add(
-      " زیرنویس فارسی :"
-    );
-
-    builder.add(
-      "\n"
-    );
-
-    builder.addPremium(
-      eDownload.emoji,
-      eDownload.id
-    );
-
-    builder.add(
-      " "
-    );
-
-    const subtitleText =
-      "(برای دانلود اینجا کلیک کنید)";
-
-    builder.addEntity(
-      subtitleText,
-      "text_link",
-      {
-        url:
-          state.sub
-      }
-    );
-
-    builder.add(
-      "\n\n"
-    );
-
-  }
-
-
-  /* =====================================================
-     دوبله
-     ===================================================== */
-
-  if (state.dub) {
-
-    builder.addPremium(
-      eDub.emoji,
-      eDub.id
-    );
-
-    builder.add(
-      " دوبله فارسی :"
-    );
-
-    builder.add(
-      "\n"
-    );
-
-    builder.addPremium(
-      eDownload.emoji,
-      eDownload.id
-    );
-
-    builder.add(
-      " "
-    );
-
-    const dubText =
-      "(برای دانلود اینجا کلیک کنید)";
-
-    builder.addEntity(
-      dubText,
-      "text_link",
-      {
-        url:
-          state.dub
-      }
-    );
-
-    builder.add(
-      "\n\n"
-    );
-
-  }
-
-
-  /* =====================================================
-     کانال
-     ===================================================== */
-
-  const channelName =
-    String(
-      state.channel?.username ||
-      DEFAULT_CHANNEL
-    ).replace(
-      /^@/,
-      ""
-    );
-
-
-  builder.addPremium(
-    eChannel.emoji,
-    eChannel.id
-  );
-
-  builder.add(
-    " @"
-  );
-
-  builder.add(
-    channelName
-  );
-
-
-  return {
-    text:
-      builder.text,
-
-    entities:
-      builder.entities
-  };
-
-}
-
-
-/* =========================================================
-   MAIN MENU
-   ========================================================= */
+/* =========================
+   Main Menu
+========================= */
 
 async function startMenu(
   chatId,
   uid
 ) {
-
   states.set(
     String(uid),
     {
-      step:
-        "choose_channel",
-
+      step: "choose_channel",
       chatId
     }
   );
 
-
   const buttons =
-    [...channels.values()]
-      .map(
-        channel => [
-          {
-            text:
-              channel.title ||
-              channel.username,
+    [
+      ...channels.values()
+    ].map(c => [
+      {
+        text:
+          c.title ||
+          c.username,
 
-            callback_data:
-              "channel:" +
-              String(channel.id)
-          }
-        ]
-      );
-
+        callback_data:
+          "channel:" +
+          String(c.id)
+      }
+    ]);
 
   return send(
     chatId,
-
-    "کانالی که می‌خواهی پست در آن منتشر شود را انتخاب کن:",
-
+    "مقصد انتشار پست را انتخاب کن:",
     {
       reply_markup: {
         inline_keyboard:
@@ -942,39 +473,29 @@ async function startMenu(
       }
     }
   );
-
 }
 
 
-/* =========================================================
-   UPDATE HANDLER
-   ========================================================= */
+/* =========================
+   Update Handler
+========================= */
 
-async function handle(
-  update
-) {
+async function handle(update) {
 
+  /* =====================
+     Callback
+  ===================== */
 
-  /* =====================================================
-     CALLBACK
-     ===================================================== */
-
-  if (
-    update.callback_query
-  ) {
-
+  if (update.callback_query) {
     const q =
       update.callback_query;
-
 
     await tg(
       "answerCallbackQuery",
       {
-        callback_query_id:
-          q.id
+        callback_query_id: q.id
       }
     );
-
 
     const uid =
       q.from.id;
@@ -982,81 +503,61 @@ async function handle(
     const chatId =
       q.message.chat.id;
 
-
-    if (
-      !isAdmin(uid)
-    ) {
+    if (!isAdmin(uid)) {
       return;
     }
-
 
     if (
       q.data?.startsWith(
         "channel:"
       )
     ) {
-
       const key =
-        q.data.slice(
-          "channel:".length
+        q.data.slice(8);
+
+      const ch =
+        [
+          ...channels.values()
+        ].find(
+          c =>
+            String(c.id) ===
+            key
         );
 
-
-      const channel =
-        [...channels.values()]
-          .find(
-            c =>
-              String(c.id) ===
-              String(key)
-          );
-
-
-      if (!channel) {
-
+      if (!ch) {
         return send(
           chatId,
-          "کانال پیدا نشد."
+          "مقصد پیدا نشد."
         );
-
       }
-
 
       states.set(
         String(uid),
         {
-          step:
-            "poster",
-
+          step: "poster",
           chatId,
-
-          channel
+          channel: ch
         }
       );
 
-
       return send(
         chatId,
-        "مرحله ۱/۱۰\n\nپوستر فیلم را به صورت عکس ارسال کن."
+        "مرحله ۱/۱۰\nپوستر فیلم را به صورت عکس بفرست."
       );
-
     }
 
     return;
   }
 
 
-  /* =====================================================
-     MESSAGE
-     ===================================================== */
+  /* =====================
+     Message
+  ===================== */
 
   const msg =
     update.message;
 
-
-  if (!msg) {
-    return;
-  }
-
+  if (!msg) return;
 
   const uid =
     msg.from?.id;
@@ -1064,153 +565,86 @@ async function handle(
   const chatId =
     msg.chat.id;
 
-
-  if (!uid) {
-    return;
-  }
+  if (!uid) return;
 
 
-  /* =====================================================
-     تشخیص خودکار Premium Emoji
-     ===================================================== */
-
-  const detected =
-    detectAndSavePremiumEmojis(
-      msg
-    );
-
-
-  /*
-    اگر کاربر Premium Emoji فرستاد
-    و هنوز در یک فرآیند ورود اطلاعات نیست،
-    به او اطلاع می‌دهیم.
-  */
-
-  if (
-    detected &&
-    !states.has(String(uid)) &&
-    isAdmin(uid)
-  ) {
-
-    await send(
-      chatId,
-      "Premium Emojiها شناسایی و ذخیره شدند ✅\n\nاز همین ایموجی‌ها در قالب پست استفاده می‌کنم."
-    );
-
-  }
-
-
-  /* =====================================================
+  /* =====================
      START
-     ===================================================== */
+  ===================== */
 
   if (
     msg.text?.startsWith(
       "/start"
     )
   ) {
+    const arg =
+      msg.text.split(
+        /\s+/
+      )[1];
 
     if (
-      isAdmin(uid)
+      arg &&
+      arg.startsWith(
+        "download_"
+      )
     ) {
+      return sendDownload(
+        chatId,
+        arg.slice(9)
+      );
+    }
 
+    if (isAdmin(uid)) {
       return startMenu(
         chatId,
         uid
       );
-
     }
-
 
     return send(
       chatId,
       "سلام 👋\n\nاین ربات مدیریت و انتشار پست‌های JadoMovie است."
     );
-
   }
 
 
-  /* =====================================================
+  /* =====================
      CANCEL
-     ===================================================== */
+  ===================== */
 
   if (
     msg.text ===
     "/cancel"
   ) {
-
     states.delete(
       String(uid)
     );
-
 
     return send(
       chatId,
       "عملیات لغو شد."
     );
-
   }
 
 
-  /* =====================================================
+  /* =====================
      MENU
-     ===================================================== */
+  ===================== */
 
   if (
-    msg.text ===
-      "/menu" &&
+    msg.text === "/menu" &&
     isAdmin(uid)
   ) {
-
     return startMenu(
       chatId,
       uid
     );
-
   }
 
 
-  /* =====================================================
-     نمایش Premium Emojiهای ذخیره شده
-     ===================================================== */
-
-  if (
-    msg.text ===
-      "/emoji" &&
-    isAdmin(uid)
-  ) {
-
-    if (
-      !premiumEmojis.length
-    ) {
-
-      return send(
-        chatId,
-        "هنوز Premium Emojiای شناسایی نشده.\n\nیک پیام نمونه که داخلش Premium Emoji دارد برای من بفرست."
-      );
-
-    }
-
-
-    return send(
-      chatId,
-
-      `Premium Emojiهای شناسایی‌شده:
-
-${premiumEmojis
-  .map(
-    (item, index) =>
-      `${index + 1}. ${item.emoji} — ${item.id}`
-  )
-  .join("\n")}`
-    );
-
-  }
-
-
-  /* =====================================================
-     ADMIN COMMANDS
-     ===================================================== */
+  /* =====================
+     ADD ADMIN
+  ===================== */
 
   if (
     msg.text ===
@@ -1218,25 +652,24 @@ ${premiumEmojis
     String(uid) ===
       OWNER_ID
   ) {
-
     states.set(
       String(uid),
       {
-        step:
-          "addadmin",
-
+        step: "addadmin",
         chatId
       }
     );
-
 
     return send(
       chatId,
       "آیدی عددی ادمین جدید را بفرست."
     );
-
   }
 
+
+  /* =====================
+     DELETE ADMIN
+  ===================== */
 
   if (
     msg.text ===
@@ -1244,714 +677,279 @@ ${premiumEmojis
     String(uid) ===
       OWNER_ID
   ) {
-
     states.set(
       String(uid),
       {
-        step:
-          "deladmin",
-
+        step: "deladmin",
         chatId
       }
     );
-
 
     return send(
       chatId,
       "آیدی عددی ادمینی که باید حذف شود را بفرست."
     );
-
   }
 
 
+  /* =====================
+     ADMINS
+  ===================== */
+
   if (
-    msg.text ===
-      "/admins" &&
+    msg.text === "/admins" &&
     String(uid) ===
       OWNER_ID
   ) {
-
     return send(
       chatId,
-
-      `مالک: ${OWNER_ID}
-
-ادمین‌ها:
-
-${
-  [...admins].join("\n") ||
-  "موردی ثبت نشده."
-}`
+      `مالک: ${OWNER_ID}\n\nادمین‌ها:\n${
+        [...admins].join(
+          "\n"
+        ) ||
+        "موردی ثبت نشده."
+      }`
     );
-
   }
 
 
-  /* =====================================================
+  /* =====================
      ADD CHANNEL
-     ===================================================== */
+  ===================== */
 
   if (
     msg.text ===
       "/addchannel" &&
     isAdmin(uid)
   ) {
-
     states.set(
       String(uid),
       {
-        step:
-          "addchannel",
-
+        step: "addchannel",
         chatId
       }
     );
 
-
     return send(
       chatId,
-      "یوزرنیم کانال را بفرست.\n\nمثال:\n@JadoMovie\n\nربات باید در کانال ادمین باشد."
+      "یوزرنیم کانال را بفرست؛ مثلاً @JadoMovie\nبرای گروه از /addgroup استفاده کن."
     );
-
   }
 
 
-  /* =====================================================
-     CHANNEL LIST
-     ===================================================== */
+  /* =====================
+     ADD GROUP
+  ===================== */
+
+  if (
+    msg.text ===
+      "/addgroup" &&
+    isAdmin(uid)
+  ) {
+    states.set(
+      String(uid),
+      {
+        step: "addgroup",
+        chatId
+      }
+    );
+
+    return send(
+      chatId,
+      "یوزرنیم گروه/سوپرگروه را بفرست؛ مثلاً @JadoMovieGroup\nربات باید در گروه اجازه ارسال پیام داشته باشد."
+    );
+  }
+
+
+  /* =====================
+     CHANNELS / GROUPS
+  ===================== */
 
   if (
     msg.text ===
       "/channels" &&
     isAdmin(uid)
   ) {
-
-    const list =
+    return send(
+      chatId,
       [...channels.values()]
         .map(
           c =>
             `${c.title} — ${c.username}`
         )
-        .join("\n");
-
-
-    return send(
-      chatId,
-      list ||
-        "کانالی ثبت نشده."
+        .join("\n")
     );
-
   }
 
 
-  /* =====================================================
-     ADMIN CHECK
-     ===================================================== */
+  /* =====================
+     PREMIUM EMOJI
+  ===================== */
 
   if (
-    !isAdmin(uid)
+    msg.text === "/emoji" &&
+    isAdmin(uid)
   ) {
+    states.set(
+      String(uid),
+      {
+        step:
+          "emoji_sample",
+        chatId
+      }
+    );
+
+    return send(
+      chatId,
+      "حالا پست نمونه‌ای که ایموجی‌های پریمیوم دارد را مستقیم برای ربات بفرست یا فوروارد کن."
+    );
+  }
+
+
+  /* =====================
+     ADMIN CHECK
+  ===================== */
+
+  if (!isAdmin(uid)) {
     return;
   }
 
 
-  const state =
+  const st =
     states.get(
       String(uid)
     );
 
-
-  if (!state) {
-    return;
-  }
+  if (!st) return;
 
 
-  /* =====================================================
-     ADD ADMIN
-     ===================================================== */
-
-  if (
-    state.step ===
-      "addadmin" &&
-    msg.text &&
-    String(uid) ===
-      OWNER_ID
-  ) {
-
-    const id =
-      msg.text.trim();
-
-
-    if (
-      !/^\d+$/.test(id)
-    ) {
-
-      return send(
-        chatId,
-        "آیدی عددی معتبر بفرست."
-      );
-
-    }
-
-
-    admins.add(id);
-
-    states.delete(
-      String(uid)
-    );
-
-
-    return send(
-      chatId,
-      "ادمین با موفقیت اضافه شد ✅"
-    );
-
-  }
-
-
-  /* =====================================================
-     DELETE ADMIN
-     ===================================================== */
-
-  if (
-    state.step ===
-      "deladmin" &&
-    msg.text &&
-    String(uid) ===
-      OWNER_ID
-  ) {
-
-    admins.delete(
-      msg.text.trim()
-    );
-
-
-    states.delete(
-      String(uid)
-    );
-
-
-    return send(
-      chatId,
-      "ادمین با موفقیت حذف شد ✅"
-    );
-
-  }
-
-
-  /* =====================================================
-     ADD CHANNEL
-     ===================================================== */
-
-  if (
-    state.step ===
-      "addchannel" &&
-    msg.text
-  ) {
-
-    const username =
-      msg.text.trim();
-
-
-    const result =
-      await tg(
-        "getChat",
-        {
-          chat_id:
-            username
-        }
-      );
-
-
-    if (
-      !result.ok
-    ) {
-
-      return send(
-        chatId,
-        "کانال پیدا نشد یا ربات دسترسی ندارد.\n\nمطمئن شو ربات در کانال ادمین است."
-      );
-
-    }
-
-
-    const channel = {
-
-      id:
-        result.result.id,
-
-      username:
-        result.result.username
-          ? "@" +
-            result.result.username
-          : username,
-
-      title:
-        result.result.title ||
-        username
-
-    };
-
-
-    channels.set(
-      String(channel.id),
-      channel
-    );
-
-
-    states.delete(
-      String(uid)
-    );
-
-
-    return send(
-      chatId,
-
-      `کانال «${esc(
-        channel.title
-      )}» با موفقیت اضافه شد ✅`
-    );
-
-  }
-
-
-  /* =====================================================
+  /* =====================
      POSTER
-     ===================================================== */
+  ===================== */
 
   if (
-    state.step ===
-      "poster"
+    st.step === "poster" &&
+    msg.photo?.length
   ) {
-
-    if (
-      !msg.photo?.length
-    ) {
-
-      return send(
-        chatId,
-        "لطفاً پوستر را به صورت عکس ارسال کن."
-      );
-
-    }
-
-
-    state.poster =
+    st.poster =
       msg.photo[
         msg.photo.length - 1
       ].file_id;
 
-
-    state.step =
-      "fa";
-
+    st.step = "fa";
 
     states.set(
       String(uid),
-      state
+      st
     );
-
 
     return send(
       chatId,
-
-      "مرحله ۲/۱۰\n\nاسم فارسی فیلم را بفرست."
+      "مرحله ۲/۱۰\nنام فارسی فیلم را بفرست."
     );
-
   }
 
 
-  /* =====================================================
-     PERSIAN NAME
-     ===================================================== */
+  /* =====================
+     TEXT STEPS
+  ===================== */
 
-  if (
-    state.step ===
-      "fa"
-  ) {
+  const textSteps = [
 
-    if (
-      !msg.text
-    ) {
-
-      return send(
-        chatId,
-        "اسم فارسی فیلم را به صورت متن ارسال کن."
-      );
-
-    }
-
-
-    const value =
-      msg.text.trim();
-
-
-    if (!value) {
-
-      return send(
-        chatId,
-        "اسم فارسی نمی‌تواند خالی باشد."
-      );
-
-    }
-
-
-    state.fa =
-      value;
-
-
-    state.step =
-      "year";
-
-
-    states.set(
-      String(uid),
-      state
-    );
-
-
-    return send(
-      chatId,
-
-      "مرحله ۳/۱۰\n\nسال ساخت فیلم را بفرست.\n\nمثال: 2026"
-    );
-
-  }
-
-
-  /* =====================================================
-     YEAR
-     ===================================================== */
-
-  if (
-    state.step ===
+    [
+      "fa",
+      "سال انتشار را بفرست.",
       "year"
-  ) {
+    ],
 
-    if (
-      !msg.text
-    ) {
-      return;
-    }
-
-
-    const year =
-      msg.text.trim();
-
-
-    if (
-      !/^\d{4}$/.test(
-        year
-      )
-    ) {
-
-      return send(
-        chatId,
-        "سال ساخت باید چهار رقمی باشد.\n\nمثال: 2026"
-      );
-
-    }
-
-
-    state.year =
-      year;
-
-
-    state.step =
-      "en";
-
-
-    states.set(
-      String(uid),
-      state
-    );
-
-
-    return send(
-      chatId,
-
-      "مرحله ۴/۱۰\n\nاسم انگلیسی فیلم را بفرست."
-    );
-
-  }
-
-
-  /* =====================================================
-     ENGLISH NAME
-     ===================================================== */
-
-  if (
-    state.step ===
+    [
+      "year",
+      "نام انگلیسی فیلم را بفرست.",
       "en"
-  ) {
+    ],
 
-    if (
-      !msg.text
-    ) {
-      return;
-    }
-
-
-    const value =
-      msg.text.trim();
-
-
-    if (!value) {
-
-      return send(
-        chatId,
-        "اسم انگلیسی نمی‌تواند خالی باشد."
-      );
-
-    }
-
-
-    state.en =
-      value;
-
-
-    state.step =
-      "imdb";
-
-
-    states.set(
-      String(uid),
-      state
-    );
-
-
-    return send(
-      chatId,
-
-      "مرحله ۵/۱۰\n\nامتیاز IMDb را بفرست.\n\nمثال: 6.6"
-    );
-
-  }
-
-
-  /* =====================================================
-     IMDb
-     ===================================================== */
-
-  if (
-    state.step ===
+    [
+      "en",
+      "امتیاز IMDb را بفرست؛ مثلاً 6.6",
       "imdb"
-  ) {
+    ],
 
-    if (
-      !msg.text
-    ) {
-      return;
-    }
-
-
-    const value =
-      msg.text
-        .trim()
-        .replace(
-          ",",
-          "."
-        );
-
-
-    const number =
-      Number(value);
-
-
-    if (
-      !Number.isFinite(
-        number
-      ) ||
-      number < 0 ||
-      number > 10
-    ) {
-
-      return send(
-        chatId,
-        "امتیاز IMDb معتبر نیست.\n\nمثال: 6.6"
-      );
-
-    }
-
-
-    state.imdb =
-      value;
-
-
-    state.step =
-      "country";
-
-
-    states.set(
-      String(uid),
-      state
-    );
-
-
-    return send(
-      chatId,
-
-      "مرحله ۶/۱۰\n\nکشور سازنده را بفرست."
-    );
-
-  }
-
-
-  /* =====================================================
-     COUNTRY
-     ===================================================== */
-
-  if (
-    state.step ===
+    [
+      "imdb",
+      "کشور سازنده را بفرست.",
       "country"
-  ) {
+    ],
 
-    if (
-      !msg.text
-    ) {
-      return;
-    }
-
-
-    const value =
-      msg.text.trim();
-
-
-    if (!value) {
-
-      return send(
-        chatId,
-        "کشور سازنده نمی‌تواند خالی باشد."
-      );
-
-    }
-
-
-    state.country =
-      value;
-
-
-    state.step =
-      "genre";
-
-
-    states.set(
-      String(uid),
-      state
-    );
-
-
-    return send(
-      chatId,
-
-      "مرحله ۷/۱۰\n\nژانر را بفرست.\n\nمثال:\nاکشن، هیجان‌انگیز، کمدی"
-    );
-
-  }
-
-
-  /* =====================================================
-     GENRE
-     ===================================================== */
-
-  if (
-    state.step ===
+    [
+      "country",
+      "ژانر را بفرست.",
       "genre"
+    ],
+
+    [
+      "genre",
+      "خلاصه داستان را بفرست.",
+      "summary"
+    ]
+
+  ];
+
+
+  for (
+    const [
+      step,
+      prompt,
+      next
+    ]
+    of textSteps
   ) {
 
     if (
-      !msg.text
+      st.step === step &&
+      msg.text
     ) {
-      return;
-    }
 
+      st[step] =
+        msg.text.trim();
 
-    const value =
-      msg.text.trim();
+      st.step =
+        next;
 
-
-    if (!value) {
+      states.set(
+        String(uid),
+        st
+      );
 
       return send(
         chatId,
-        "ژانر نمی‌تواند خالی باشد."
+        prompt
       );
-
     }
-
-
-    state.genre =
-      value;
-
-
-    state.step =
-      "summary";
-
-
-    states.set(
-      String(uid),
-      state
-    );
-
-
-    return send(
-      chatId,
-
-      "مرحله ۸/۱۰\n\nخلاصه داستان را بفرست."
-    );
-
   }
 
 
-  /* =====================================================
+  /* =====================
      SUMMARY
-     ===================================================== */
+  ===================== */
 
   if (
-    state.step ===
-      "summary"
+    st.step ===
+      "summary" &&
+    msg.text
   ) {
-
-    if (
-      !msg.text
-    ) {
-      return;
-    }
-
-
-    const value =
+    st.summary =
       msg.text.trim();
 
-
-    if (!value) {
-
-      return send(
-        chatId,
-        "خلاصه داستان نمی‌تواند خالی باشد."
-      );
-
-    }
-
-
-    state.summary =
-      value;
-
-
-    state.step =
-      "type";
-
+    st.step = "type";
 
     states.set(
       String(uid),
-      state
+      st
     );
-
 
     return send(
       chatId,
-
-      "مرحله ۹/۱۰\n\nنوع دانلود را انتخاب کن:",
-
+      "نوع دانلود را انتخاب کن:",
       {
         reply_markup: {
           keyboard: [
@@ -1987,304 +985,260 @@ ${
           ],
 
           resize_keyboard:
-            true,
-
-          one_time_keyboard:
             true
         }
       }
     );
-
   }
 
 
-  /* =====================================================
+  /* =====================
      DOWNLOAD TYPE
-     ===================================================== */
+  ===================== */
 
   if (
-    state.step ===
-      "type"
+    st.step === "type" &&
+    msg.text
   ) {
 
-    if (
-      !msg.text
-    ) {
-      return;
-    }
-
-
-    const type =
-      msg.text.trim();
-
+    const allowed = [
+      "فقط زیرنویس",
+      "فقط دوبله",
+      "هر دو"
+    ];
 
     if (
-      ![
-        "فقط زیرنویس",
-        "فقط دوبله",
-        "هر دو"
-      ].includes(type)
+      !allowed.includes(
+        msg.text
+      )
     ) {
-
       return send(
         chatId,
-        "یکی از گزینه‌های زیر را انتخاب کن:\n\nفقط زیرنویس\nفقط دوبله\nهر دو"
+        "یکی از گزینه‌ها را انتخاب کن."
       );
-
     }
 
+    st.type =
+      msg.text;
 
-    state.type =
-      type;
-
-
-    const removeKeyboard = {
-      reply_markup: {
-        remove_keyboard:
-          true
-      }
-    };
-
-
-    /* فقط زیرنویس */
 
     if (
-      type ===
-        "فقط زیرنویس"
+      msg.text ===
+      "فقط زیرنویس"
     ) {
-
-      state.step =
+      st.step =
         "sub";
 
-
       states.set(
         String(uid),
-        state
+        st
       );
-
 
       return send(
         chatId,
-
-        "مرحله ۱۰/۱۰\n\nلینک دانلود زیرنویس فارسی را ارسال کن.",
-
-        removeKeyboard
+        "🔤 لینک دانلود زیرنویس فارسی را ارسال کن."
       );
-
     }
 
-
-    /* فقط دوبله */
 
     if (
-      type ===
-        "فقط دوبله"
+      msg.text ===
+      "فقط دوبله"
     ) {
-
-      state.step =
+      st.step =
         "dub";
-
 
       states.set(
         String(uid),
-        state
+        st
       );
-
 
       return send(
         chatId,
-
-        "مرحله ۱۰/۱۰\n\nلینک دانلود دوبله فارسی را ارسال کن.",
-
-        removeKeyboard
+        "🔊 لینک دانلود دوبله فارسی را ارسال کن."
       );
-
     }
 
 
-    /* هر دو */
-
-    state.step =
+    st.step =
       "sub";
-
 
     states.set(
       String(uid),
-      state
+      st
     );
-
 
     return send(
       chatId,
-
-      "لینک دانلود زیرنویس فارسی را ارسال کن.",
-
-      removeKeyboard
+      "🔤 لینک دانلود زیرنویس فارسی را ارسال کن."
     );
-
   }
 
 
-  /* =====================================================
+  /* =====================
      SUBTITLE
-     ===================================================== */
+  ===================== */
 
   if (
-    state.step ===
-      "sub"
+    st.step === "sub" &&
+    msg.text
   ) {
-
-    if (
-      !msg.text
-    ) {
-      return;
-    }
-
 
     const url =
       msg.text.trim();
 
-
     if (
       !validUrl(url)
     ) {
-
       return send(
         chatId,
-
-        "❌ لینک معتبر نیست.\n\nمثال:\nhttps://example.com/subtitle"
+        "❌ لینک معتبر نیست."
       );
-
     }
 
-
-    state.sub =
+    st.sub =
       url;
 
-
     if (
-      state.type ===
-        "هر دو"
+      st.type === "هر دو"
     ) {
-
-      state.step =
+      st.step =
         "dub";
-
 
       states.set(
         String(uid),
-        state
+        st
       );
-
 
       return send(
         chatId,
-
-        "حالا لینک دانلود دوبله فارسی را ارسال کن."
+        "🔊 حالا لینک دانلود دوبله فارسی را ارسال کن."
       );
-
     }
-
 
     return publish(
       uid,
-      state
+      st
     );
-
   }
 
 
-  /* =====================================================
+  /* =====================
      DUB
-     ===================================================== */
+  ===================== */
 
   if (
-    state.step ===
-      "dub"
+    st.step === "dub" &&
+    msg.text
   ) {
-
-    if (
-      !msg.text
-    ) {
-      return;
-    }
-
 
     const url =
       msg.text.trim();
 
-
     if (
       !validUrl(url)
     ) {
-
       return send(
         chatId,
-
-        "❌ لینک معتبر نیست.\n\nمثال:\nhttps://example.com/dub"
+        "❌ لینک معتبر نیست."
       );
-
     }
 
-
-    state.dub =
+    st.dub =
       url;
-
 
     return publish(
       uid,
-      state
+      st
     );
-
   }
 
-}
 
+  /* =====================
+     PREMIUM EMOJI SAMPLE
+  ===================== */
 
-/* =========================================================
-   PUBLISH
-   ========================================================= */
+  if (
+    st.step ===
+      "emoji_sample"
+  ) {
 
-async function publish(
-  uid,
-  state
-) {
+    const sourceText =
+      msg.text ??
+      msg.caption ??
+      "";
 
-  try {
-
-    const caption =
-      buildPost(
-        state
+    const entities = [
+      ...(msg.entities || []),
+      ...(msg.caption_entities || [])
+    ]
+      .filter(
+        e =>
+          e.type ===
+            "custom_emoji" &&
+          e.custom_emoji_id
+      )
+      .sort(
+        (a, b) =>
+          a.offset -
+          b.offset
       );
 
 
-    /*
-      sendPhoto با caption_entities
+    const samples =
+      entities.map(e => ({
+        id:
+          String(
+            e.custom_emoji_id
+          ),
 
-      این قسمت مهم است:
-      دیگر parse_mode را استفاده نمی‌کنیم.
-      Premium Emojiها مستقیماً
-      به عنوان custom_emoji entity
-      ارسال می‌شوند.
-    */
+        fallback:
+          utf16Slice(
+            sourceText,
+            e.offset,
+            e.length
+          ) || "😀"
+      }));
 
-    const result =
-      await tg(
-        "sendPhoto",
-        {
-          chat_id:
-            state.channel.id,
 
-          photo:
-            state.poster,
+    const unique = [];
+    const seen =
+      new Set();
 
-          caption:
-            caption.text,
 
-          caption_entities:
-            caption.entities
-        }
+    for (
+      const item of samples
+    ) {
+      if (
+        !seen.has(
+          item.id
+        )
+      ) {
+        seen.add(
+          item.id
+        );
+
+        unique.push(
+          item
+        );
+      }
+    }
+
+
+    if (
+      !unique.length
+    ) {
+      return send(
+        chatId,
+        "ایموجی پریمیوم قابل تشخیص پیدا نشد.\nپست نمونه را مستقیم برای ربات بفرست یا فوروارد کن."
       );
+    }
+
+
+    emojiSamples.set(
+      String(uid),
+      unique
+    );
 
 
     states.delete(
@@ -2292,66 +1246,220 @@ async function publish(
     );
 
 
-    if (
-      result.ok
-    ) {
+    return send(
+      chatId,
+      `ایموجی‌های پریمیوم پیدا شد:\n\n${
+        unique
+          .map(
+            (x, i) =>
+              `${i + 1}. ${x.fallback} → ${x.id}`
+          )
+          .join("\n")
+      }\n\nذخیره شد. برای ساخت پست /menu را بزن.`
+    );
+  }
 
-      return send(
-        state.chatId ||
-          uid,
 
-        "پست با موفقیت در کانال منتشر شد ✅"
+  /* =====================
+     ADD ADMIN
+  ===================== */
+
+  if (
+    st.step ===
+      "addadmin" &&
+    msg.text &&
+    String(uid) ===
+      OWNER_ID
+  ) {
+
+    admins.add(
+      msg.text.trim()
+    );
+
+    states.delete(
+      String(uid)
+    );
+
+    return send(
+      chatId,
+      "ادمین اضافه شد ✅"
+    );
+  }
+
+
+  /* =====================
+     DELETE ADMIN
+  ===================== */
+
+  if (
+    st.step ===
+      "deladmin" &&
+    msg.text &&
+    String(uid) ===
+      OWNER_ID
+  ) {
+
+    admins.delete(
+      msg.text.trim()
+    );
+
+    states.delete(
+      String(uid)
+    );
+
+    return send(
+      chatId,
+      "ادمین حذف شد ✅"
+    );
+  }
+
+
+  /* =====================
+     ADD CHANNEL / GROUP
+  ===================== */
+
+  if (
+    (
+      st.step ===
+        "addchannel" ||
+      st.step ===
+        "addgroup"
+    ) &&
+    msg.text
+  ) {
+
+    const username =
+      msg.text.trim();
+
+
+    const r =
+      await tg(
+        "getChat",
+        {
+          chat_id:
+            username
+        }
       );
 
+
+    if (!r.ok) {
+      return send(
+        chatId,
+        "مقصد پیدا نشد یا ربات دسترسی ندارد."
+      );
     }
 
 
-    console.error(
-      "Publish error:",
-      result.description
+    const c = {
+
+      id:
+        r.result.id,
+
+      username:
+        r.result.username
+          ? "@" +
+            r.result.username
+          : username,
+
+      title:
+        r.result.title ||
+        username
+
+    };
+
+
+    channels.set(
+      String(c.id),
+      c
+    );
+
+
+    states.delete(
+      String(uid)
     );
 
 
     return send(
-      state.chatId ||
-        uid,
+      chatId,
 
-      `انتشار ناموفق بود ❌
+      st.step ===
+        "addgroup"
 
-${esc(
-  result.description ||
-  "خطای نامشخص"
-)}`
+        ? `گروه «${c.title}» اضافه شد ✅\nربات باید در گروه اجازه ارسال پیام داشته باشد.`
+
+        : `کانال «${c.title}» اضافه شد ✅\nربات باید در کانال ادمین باشد.`
     );
-
-
-  } catch (error) {
-
-    console.error(
-      "Publish exception:",
-      error
-    );
-
-
-    return send(
-      state.chatId ||
-        uid,
-
-      `خطا هنگام انتشار ❌
-
-${esc(
-  error.message
-)}`
-    );
-
   }
-
 }
 
 
-/* =========================================================
-   OLD DOWNLOAD SYSTEM
-   ========================================================= */
+/* =========================
+   Publish
+========================= */
+
+async function publish(
+  uid,
+  st
+) {
+
+  const emojiList =
+    emojiSamples.get(
+      String(uid)
+    ) || [];
+
+
+  const built =
+    buildJadoCaption(
+      st,
+      emojiList
+    );
+
+
+  const r =
+    await tg(
+      "sendPhoto",
+      {
+        chat_id:
+          st.channel.id,
+
+        photo:
+          st.poster,
+
+        caption:
+          built.text,
+
+        caption_entities:
+          built.entities
+      }
+    );
+
+
+  states.delete(
+    String(uid)
+  );
+
+
+  return send(
+    st.chatId || uid,
+
+    r.ok
+
+      ? `پست با موفقیت در «${
+          st.channel.title ||
+          "گروه"
+        }» منتشر شد ✅`
+
+      : `انتشار ناموفق بود ❌\n\n${
+          r.description ||
+          "خطای نامشخص"
+        }`
+  );
+}
+
+
+/* =========================
+   Download System
+========================= */
 
 function saveDownload(
   file_id,
@@ -2379,24 +1487,20 @@ function saveDownload(
 }
 
 
-async function sendDownload(
+function sendDownload(
   chatId,
   key
 ) {
 
-  const item =
-    downloads.get(
-      key
-    );
+  const d =
+    downloads.get(key);
 
 
-  if (!item) {
-
+  if (!d) {
     return send(
       chatId,
       "این لینک منقضی یا نامعتبر است."
     );
-
   }
 
 
@@ -2407,19 +1511,18 @@ async function sendDownload(
         chatId,
 
       document:
-        item.file_id,
+        d.file_id,
 
       caption:
-        `${item.type}\n${item.name}`
+        `${d.type}\n${d.name}`
     }
   );
-
 }
 
 
-/* =========================================================
-   WEBHOOK
-   ========================================================= */
+/* =========================
+   Webhook
+========================= */
 
 async function setWebhook(
   baseUrl
@@ -2433,13 +1536,12 @@ async function setWebhook(
         "/webhook"
     }
   );
-
 }
 
 
-/* =========================================================
-   HTTP SERVER
-   ========================================================= */
+/* =========================
+   HTTP Server
+========================= */
 
 const server =
   http.createServer(
@@ -2450,10 +1552,7 @@ const server =
 
       try {
 
-
-        /* =================================================
-           HOME
-           ================================================= */
+        /* HOME */
 
         if (
           req.method ===
@@ -2469,76 +1568,61 @@ const server =
             }
           );
 
-
           return res.end(
             "JadoMovie Bot is running."
           );
-
         }
 
 
-        /* =================================================
-           SETUP
-           ================================================= */
+        /* SETUP */
 
         if (
           req.method ===
             "GET" &&
-          req.url === "/setup"
+          req.url ===
+            "/setup"
         ) {
 
-          const baseUrl =
+          const base =
             `https://${req.headers.host}`;
 
-
-          const result =
+          const r =
             await setWebhook(
-              baseUrl
+              base
             );
 
 
           res.writeHead(
-            result.ok
-              ? 200
-              : 500,
-
+            r.ok ? 200 : 500,
             {
               "content-type":
-                "application/json; charset=utf-8"
+                "application/json"
             }
           );
 
 
           return res.end(
-            JSON.stringify(
-              result
-            )
+            JSON.stringify(r)
           );
-
         }
 
 
-        /* =================================================
-           WEBHOOK
-           ================================================= */
+        /* WEBHOOK */
 
         if (
           req.method ===
             "POST" &&
-          req.url === "/webhook"
+          req.url ===
+            "/webhook"
         ) {
 
-          let body =
-            "";
+          let body = "";
 
 
           req.on(
             "data",
             chunk => {
-
-              body +=
-                chunk;
-
+              body += chunk;
             }
           );
 
@@ -2554,21 +1638,16 @@ const server =
                     body
                   );
 
-
                 await handle(
                   update
                 );
 
-
-              } catch (
-                error
-              ) {
+              } catch (e) {
 
                 console.error(
                   "Webhook error:",
-                  error
+                  e
                 );
-
               }
 
 
@@ -2576,11 +1655,9 @@ const server =
                 200
               );
 
-
               res.end(
                 "ok"
               );
-
             }
           );
 
@@ -2589,48 +1666,31 @@ const server =
         }
 
 
-        /* =================================================
-           NOT FOUND
-           ================================================= */
+        /* NOT FOUND */
 
         res.writeHead(
           404
         );
 
-
         res.end(
           "Not found"
         );
 
+      } catch (e) {
 
-      } catch (
-        error
-      ) {
-
-        console.error(
-          "Server error:",
-          error
-        );
-
+        console.error(e);
 
         res.writeHead(
           500
         );
 
-
         res.end(
           "Server error"
         );
-
       }
-
     }
   );
 
-
-/* =========================================================
-   START
-   ========================================================= */
 
 server.listen(
   PORT,
@@ -2638,10 +1698,6 @@ server.listen(
 
     console.log(
       `JadoMovie Bot listening on ${PORT}`
-    );
-
-    console.log(
-      `Channel: ${DEFAULT_CHANNEL}`
     );
 
   }
